@@ -45,6 +45,9 @@ def test_alembic_upgrade_head_creates_persistence_tables(tmp_path: Path) -> None
         relationship_uniques = {constraint["name"] for constraint in inspector.get_unique_constraints("relationships")}
         memory_embedding_foreign_keys = inspector.get_foreign_keys("memory_embeddings")
         agent_goal_foreign_keys = inspector.get_foreign_keys("agent_goals")
+        goal_columns = {column["name"]: column for column in inspector.get_columns("agent_goals")}
+        world_event_columns = {column["name"]: column for column in inspector.get_columns("world_events")}
+        inventory_columns = {column["name"]: column for column in inspector.get_columns("inventories")}
 
         assert "ix_relationships_source_agent_id" in relationship_indexes
         assert "ix_relationships_target_agent_id" in relationship_indexes
@@ -55,6 +58,9 @@ def test_alembic_upgrade_head_creates_persistence_tables(tmp_path: Path) -> None
         assert any(foreign_key["referred_table"] == "episodic_memories" for foreign_key in memory_embedding_foreign_keys)
         assert any(foreign_key["referred_table"] == "agents" for foreign_key in memory_embedding_foreign_keys)
         assert any(foreign_key["referred_table"] == "agents" for foreign_key in agent_goal_foreign_keys)
+        assert goal_columns["success_condition"]["nullable"] is False
+        assert world_event_columns["payload"]["nullable"] is False
+        assert inventory_columns["metadata"]["nullable"] is False
 
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()

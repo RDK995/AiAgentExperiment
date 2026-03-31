@@ -243,7 +243,12 @@ def upgrade() -> None:
         sa.Column("target_entity_type", sa.Text(), nullable=True),
         sa.Column("target_entity_id", sa.Uuid(), nullable=True),
         sa.Column("blocker_summary", sa.Text(), server_default="", nullable=False),
-        sa.Column("success_condition", postgresql.JSONB() if is_postgresql else sa.JSON(), server_default=sa.text("'{}'::jsonb") if is_postgresql else "{}"),
+        sa.Column(
+            "success_condition",
+            postgresql.JSONB() if is_postgresql else sa.JSON(),
+            server_default=sa.text("'{}'::jsonb") if is_postgresql else "{}",
+            nullable=False,
+        ),
         sa.Column("source", goal_source, nullable=False),
         sa.Column("created_tick", sa.BigInteger(), nullable=False),
         sa.Column("updated_tick", sa.BigInteger(), nullable=False),
@@ -314,7 +319,12 @@ def upgrade() -> None:
         sa.Column("target_ids", UUIDArrayType(), server_default="[]", nullable=False),
         sa.Column("location_x", sa.Integer(), nullable=True),
         sa.Column("location_y", sa.Integer(), nullable=True),
-        sa.Column("payload", postgresql.JSONB() if is_postgresql else sa.JSON(), server_default=sa.text("'{}'::jsonb") if is_postgresql else "{}"),
+        sa.Column(
+            "payload",
+            postgresql.JSONB() if is_postgresql else sa.JSON(),
+            server_default=sa.text("'{}'::jsonb") if is_postgresql else "{}",
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_world_events")),
     )
     op.create_index("ix_world_events_tick", "world_events", ["tick"])
@@ -327,7 +337,12 @@ def upgrade() -> None:
         sa.Column("owner_id", sa.Uuid(), nullable=False),
         sa.Column("item_type", sa.Text(), nullable=False),
         sa.Column("quantity", sa.Integer(), nullable=False),
-        sa.Column("metadata", postgresql.JSONB() if is_postgresql else sa.JSON(), server_default=sa.text("'{}'::jsonb") if is_postgresql else "{}"),
+        sa.Column(
+            "metadata",
+            postgresql.JSONB() if is_postgresql else sa.JSON(),
+            server_default=sa.text("'{}'::jsonb") if is_postgresql else "{}",
+            nullable=False,
+        ),
         sa.CheckConstraint("quantity >= 0", name=op.f("ck_inventories_inventories_quantity_non_negative")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_inventories")),
     )

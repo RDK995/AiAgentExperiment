@@ -1,0 +1,8 @@
+; Engine configuration file.
+; Placeholder project file for initial repository layout.
+
+config_version=5
+
+[application]
+config/name="AiAgentExperiment"
+run/main_scene=""

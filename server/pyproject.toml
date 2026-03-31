@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Authoritative backend for the autonomous village simulation"
 requires-python = ">=3.10"
 dependencies = [
+    "alembic>=1.13.2,<2.0.0",
     "fastapi>=0.115.0,<1.0.0",
     "pydantic>=2.8.0,<3.0.0",
     "pydantic-settings>=2.4.0,<3.0.0",
@@ -15,6 +16,10 @@ dependencies = [
 dev = [
     "pytest>=8.2.0,<9.0.0",
     "httpx>=0.27.0,<1.0.0",
+]
+postgres = [
+    "psycopg[binary]>=3.2.0,<4.0.0",
+    "pgvector>=0.3.6,<1.0.0",
 ]
 
 [build-system]

@@ -35,10 +35,9 @@ class ActionExecutor:
         elif action.action_type is ActionType.REST:
             agent.fatigue = max(0.0, agent.fatigue - 6.0)
         elif action.action_type is ActionType.WANDER:
-            direction = 1 if tick % 2 == 0 else -1
-            target_x = agent.x + direction
-            if is_action_legal(world, agent, "move", target_x=target_x, target_y=agent.y):
-                agent.x = target_x
+            destination = self._select_wander_destination(world, agent, tick)
+            if destination is not None:
+                agent.x, agent.y = destination
                 agent.plan_failure_count = 0
             else:
                 agent.plan_failure_count += 1
@@ -67,3 +66,27 @@ class ActionExecutor:
         event_bus.emit(executed_event)
         events.append(executed_event)
         return events
+
+    @staticmethod
+    def _select_wander_destination(
+        world: WorldState,
+        agent: AgentState,
+        tick: int,
+    ) -> tuple[int, int] | None:
+        """Choose the first legal adjacent wander tile in a deterministic order."""
+
+        horizontal_preference = [(-1, 0), (1, 0)] if tick % 2 == 1 else [(1, 0), (-1, 0)]
+        vertical_preference = [(0, 1), (0, -1)] if _agent_bias(agent) % 2 == 0 else [(0, -1), (0, 1)]
+
+        for delta_x, delta_y in [*horizontal_preference, *vertical_preference]:
+            target_x = agent.x + delta_x
+            target_y = agent.y + delta_y
+            if is_action_legal(world, agent, "move", target_x=target_x, target_y=target_y):
+                return target_x, target_y
+        return None
+
+
+def _agent_bias(agent: AgentState) -> int:
+    """Derive a stable per-agent bias for deterministic tie-breaking."""
+
+    return sum(ord(character) for character in agent.agent_id)

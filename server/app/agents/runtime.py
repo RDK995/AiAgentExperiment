@@ -74,6 +74,7 @@ class AgentRuntime:
 
         trace.stage_order.append("update_needs")
         self._need_service.update(agent)
+        context = self._perception_service.perceive(world, agent, tick.at)
 
         trace.stage_order.append("score_actions")
         candidates = self._utility_ai.score_actions(agent, context)

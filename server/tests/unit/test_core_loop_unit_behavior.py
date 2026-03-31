@@ -195,6 +195,20 @@ def test_agent_fast_loop_stages_run_in_correct_order(simple_world: WorldState) -
     ]
 
 
+def test_fast_loop_scores_actions_from_post_update_needs(simple_world: WorldState) -> None:
+    """Action scoring should use need values after the current tick's need update."""
+
+    simple_world.agents[0].hunger = 0.0
+    simple_world.agents[0].thirst = 14.0
+    simple_world.agents[0].fatigue = 0.0
+    runtime = _build_agent_runtime(RecordingSlowLoopService())
+
+    runtime.step_all(simple_world, _tick_at(hour=6, minute=5), EventBus())
+
+    assert simple_world.agents[0].current_action == "drink"
+    assert runtime.last_step_traces[0].selected_action == "drink"
+
+
 def test_repeated_plan_failure_marks_slow_loop_eligibility(single_tile_world: WorldState) -> None:
     """Repeated plan failures should mark the agent as slow-loop eligible."""
 

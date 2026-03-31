@@ -1,0 +1,1 @@
+"""Simulation event bus placeholder."""

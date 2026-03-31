@@ -1,3 +1,31 @@
-version: '3.9'
+version: "3.9"
 
-services: {}
+services:
+  server:
+    build:
+      context: ./server
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - .env.example
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server:/app
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["ops"]
+    volumes:
+      - ./ops/prometheus:/etc/prometheus
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["ops"]
+    volumes:
+      - ./ops/grafana:/var/lib/grafana
+
+  loki:
+    image: grafana/loki:latest
+    profiles: ["ops"]
+    volumes:
+      - ./ops/loki:/etc/loki

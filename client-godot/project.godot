@@ -1,8 +1,15 @@
 ; Engine configuration file.
-; Placeholder project file for initial repository layout.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
 [application]
-config/name="AiAgentExperiment"
-run/main_scene=""
+
+config/name="Autonomous Village"
+run/main_scene="res://scenes/world/world_view.tscn"
+config/features=PackedStringArray("4.6")

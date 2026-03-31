@@ -17,6 +17,7 @@ const ALLOWED_AGENT_KEYS := [
 	"agent_id",
 	"name",
 	"position",
+	"needs",
 	"current_action",
 ]
 const FORBIDDEN_SNAPSHOT_KEYS := [

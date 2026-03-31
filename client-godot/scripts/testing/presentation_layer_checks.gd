@@ -14,6 +14,7 @@ func _run_checks() -> void:
 	_check_valid_snapshot_is_accepted()
 	_check_only_snapshot_contract_fields_are_accepted()
 	_check_forbidden_authoritative_fields_are_rejected()
+	_check_backend_agent_needs_field_is_accepted()
 	_check_projection_discards_non_presentational_fields()
 	_check_visual_interpolation_does_not_mutate_authoritative_positions()
 
@@ -54,6 +55,22 @@ func _check_only_snapshot_contract_fields_are_accepted() -> void:
 			break
 
 	assert(found_contract_error, "Expected client to reject non-contract snapshot fields.")
+
+
+func _check_backend_agent_needs_field_is_accepted() -> void:
+	var snapshot := _sample_snapshot()
+	var agents: Array = snapshot["agents"]
+	var first_agent: Dictionary = agents[0]
+	first_agent["needs"] = {
+		"hunger": 10.0,
+		"thirst": 20.0,
+		"fatigue": 30.0,
+	}
+	agents[0] = first_agent
+	snapshot["agents"] = agents
+
+	var errors := PresentationBoundaryValidator.validate_snapshot(snapshot)
+	assert(errors.is_empty(), "Expected backend agent 'needs' field to be accepted.")
 
 
 func _check_projection_discards_non_presentational_fields() -> void:

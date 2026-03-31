@@ -51,9 +51,7 @@ class SimulationRuntime:
         """Advance the authoritative state by one tick and return the snapshot."""
 
         async with self._lock:
-            self._world_state.tick += 1
-            self._advance_agents()
-            return self._world_state.to_snapshot()
+            return self._step_once_locked()
 
     async def get_snapshot(self) -> SimulationSnapshot:
         """Return a consistent snapshot of current authoritative state."""
@@ -64,11 +62,12 @@ class SimulationRuntime:
     async def run_for_ticks(self, ticks: int) -> SimulationSnapshot:
         """Advance the simulation by a fixed number of authoritative ticks."""
 
-        latest_snapshot: SimulationSnapshot | None = None
-        for _ in range(ticks):
-            latest_snapshot = await self.step_once()
-        assert latest_snapshot is not None
-        return latest_snapshot
+        async with self._lock:
+            latest_snapshot: SimulationSnapshot | None = None
+            for _ in range(ticks):
+                latest_snapshot = self._step_once_locked()
+            assert latest_snapshot is not None
+            return latest_snapshot
 
     async def move_agent(self, agent_id: str, target_x: int, target_y: int) -> SimulationSnapshot:
         """Apply an authoritative movement action if it is legal."""
@@ -118,3 +117,10 @@ class SimulationRuntime:
             if agent.agent_id == agent_id:
                 return agent
         return None
+
+    def _step_once_locked(self) -> SimulationSnapshot:
+        """Advance one tick while the caller holds the runtime lock."""
+
+        self._world_state.tick += 1
+        self._advance_agents()
+        return self._world_state.to_snapshot()

@@ -47,3 +47,32 @@ def test_get_snapshot_does_not_advance_state() -> None:
         assert snapshot.agents[0].position.y == world.agents[0].y
 
     asyncio.run(run_test())
+
+
+def test_run_for_ticks_holds_runtime_lock_for_entire_batch() -> None:
+    """Batch runs should execute under one lock acquisition to prevent interleaving."""
+
+    class CountingLock:
+        def __init__(self) -> None:
+            self._lock = asyncio.Lock()
+            self.acquire_count = 0
+
+        async def __aenter__(self) -> None:
+            self.acquire_count += 1
+            await self._lock.acquire()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            self._lock.release()
+
+    async def run_test() -> None:
+        world = build_initial_world_state(width=8, height=6, initial_agent_count=1)
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=999.0)
+        counting_lock = CountingLock()
+        runtime._lock = counting_lock  # type: ignore[assignment]
+
+        snapshot = await runtime.run_for_ticks(3)
+
+        assert snapshot.tick == 3
+        assert counting_lock.acquire_count == 1
+
+    asyncio.run(run_test())

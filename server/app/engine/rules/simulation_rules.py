@@ -20,14 +20,39 @@ def is_position_within_bounds(world: WorldState, x: int, y: int) -> bool:
     return 0 <= x < world.width and 0 <= y < world.height
 
 
-def is_movement_valid(world: WorldState, x: int, y: int) -> bool:
-    """A move is valid only if the destination exists and is walkable."""
+def is_position_occupied(
+    world: WorldState,
+    x: int,
+    y: int,
+    ignore_agent_id: str | None = None,
+) -> bool:
+    """Check whether another agent already occupies the requested tile."""
+
+    for agent in world.agents:
+        if ignore_agent_id is not None and agent.agent_id == ignore_agent_id:
+            continue
+        if agent.x == x and agent.y == y:
+            return True
+    return False
+
+
+def is_movement_valid(
+    world: WorldState,
+    x: int,
+    y: int,
+    ignore_agent_id: str | None = None,
+) -> bool:
+    """A move is valid only if the destination exists, is walkable, and is unoccupied."""
 
     if not is_position_within_bounds(world, x, y):
         return False
 
     tile = get_tile_at(world, x, y)
-    return tile is not None and tile.walkable
+    return (
+        tile is not None
+        and tile.walkable
+        and not is_position_occupied(world, x, y, ignore_agent_id=ignore_agent_id)
+    )
 
 
 def is_action_legal(
@@ -48,7 +73,7 @@ def is_action_legal(
     if target_x is None or target_y is None:
         return False
 
-    if not is_movement_valid(world, target_x, target_y):
+    if not is_movement_valid(world, target_x, target_y, ignore_agent_id=agent.agent_id):
         return False
 
     manhattan_distance = abs(target_x - agent.x) + abs(target_y - agent.y)

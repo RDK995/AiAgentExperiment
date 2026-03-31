@@ -3,9 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
+
+from app.agents.executor import ActionExecutor
+from app.agents.needs import NeedService
+from app.agents.perception import PerceptionService
+from app.agents.planner import ActionPlanner
+from app.agents.runtime import AgentRuntime
+from app.agents.utility_ai import UtilityAI
+from app.cognition.belief_updater import BeliefUpdater
+from app.cognition.goal_updater import GoalUpdater
+from app.cognition.reflection import ReflectionWorkflow
+from app.cognition.reflection_graph import AutobiographyBuilder
+from app.cognition.slow_loop import SlowLoopService
+from app.cognition.validation import ReflectionValidator
+from app.engine.event_bus import EventBus
 from app.engine.rules.simulation_rules import is_action_legal
+from app.engine.scheduler import TaskScheduler
+from app.engine.sim_clock import SimulationClock
+from app.engine.world_loop import WorldLoop
 from app.engine.world_state import AgentState, WorldState
+from app.memory.retriever import MemoryRetriever
+from app.memory.writer import MemoryWriter
 from app.schemas.api import SimulationSnapshot
+from app.schemas.event import EventType, SimulationEvent
+from app.telemetry.metrics import TelemetryRecorder
 
 
 class SimulationRuntime:
@@ -17,6 +39,38 @@ class SimulationRuntime:
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._running = False
+        self._event_bus = EventBus()
+        self._scheduler = TaskScheduler()
+        self._telemetry = TelemetryRecorder()
+        self._sim_clock = SimulationClock(
+            start_time=initial_state.current_time,
+            tick_interval=timedelta(seconds=tick_interval_seconds),
+        )
+        self._slow_loop_service = SlowLoopService(
+            memory_retriever=MemoryRetriever(),
+            autobiography_builder=AutobiographyBuilder(),
+            reflection_workflow=ReflectionWorkflow(),
+            validator=ReflectionValidator(),
+            goal_updater=GoalUpdater(),
+            belief_updater=BeliefUpdater(),
+            memory_writer=MemoryWriter(),
+        )
+        self._agent_runtime = AgentRuntime(
+            perception_service=PerceptionService(),
+            need_service=NeedService(),
+            utility_ai=UtilityAI(),
+            planner=ActionPlanner(),
+            executor=ActionExecutor(),
+            slow_loop_service=self._slow_loop_service,
+        )
+        self._world_loop = WorldLoop(
+            world_state=self._world_state,
+            sim_clock=self._sim_clock,
+            scheduler=self._scheduler,
+            agent_runtime=self._agent_runtime,
+            telemetry=self._telemetry,
+            event_bus=self._event_bus,
+        )
 
     async def start(self) -> None:
         """Start the background tick loop if it is not already running."""
@@ -91,24 +145,64 @@ class SimulationRuntime:
             agent.current_action = "walking"
             return self._world_state.to_snapshot()
 
-    def _advance_agents(self) -> None:
-        """Apply deterministic placeholder simulation rules for each agent."""
+    async def emit_simulation_event(
+        self,
+        event_type: EventType,
+        agent_id: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        """Enqueue an authoritative simulation event for the next world tick."""
 
-        for index, agent in enumerate(self._world_state.agents):
-            agent.advance_needs()
-            direction = 1 if (self._world_state.tick + index) % 2 == 0 else -1
-            next_x = agent.x + direction
-            if is_action_legal(
-                self._world_state,
-                agent,
-                action="move",
-                target_x=next_x,
-                target_y=agent.y,
-            ):
-                agent.x = next_x
-                agent.current_action = "walking"
-            else:
-                agent.current_action = "idle"
+        async with self._lock:
+            self._event_bus.emit(
+                SimulationEvent(
+                    type=event_type,
+                    tick=self._world_state.tick,
+                    sim_time=self._world_state.current_time,
+                    agent_id=agent_id,
+                    payload=payload or {},
+                )
+            )
+
+    async def get_debug_state(self) -> dict[str, object]:
+        """Return lightweight debug state for the current simulation runtime."""
+
+        async with self._lock:
+            return {
+                "tick": self._world_state.tick,
+                "sim_time": self._world_state.current_time.isoformat(),
+                "weather": self._world_state.weather,
+                "pending_scheduler_tasks": self._scheduler.pending_task_ids(),
+                "last_fast_loop_traces": [
+                    {
+                        "agent_id": trace.agent_id,
+                        "stage_order": list(trace.stage_order),
+                        "selected_action": trace.selected_action,
+                        "planner_hints_before": list(trace.planner_hints_before),
+                        "planner_hints_after": list(trace.planner_hints_after),
+                    }
+                    for trace in self._agent_runtime.last_step_traces
+                ],
+                "last_slow_loop_results": [
+                    {
+                        "agent_id": result.agent_id,
+                        "trigger_reasons": list(result.trigger_reasons),
+                        "applied": result.applied,
+                        "planner_hints": list(result.planner_hints),
+                    }
+                    for result in self._slow_loop_service.last_results
+                ],
+                "last_tick_telemetry": (
+                    {
+                        "tick": self._telemetry.tick_history[-1].tick,
+                        "stage_order": list(self._telemetry.tick_history[-1].stage_order),
+                        "event_count": self._telemetry.tick_history[-1].event_count,
+                        "event_types": list(self._telemetry.tick_history[-1].event_types),
+                    }
+                    if self._telemetry.tick_history
+                    else None
+                ),
+            }
 
     def _get_agent(self, agent_id: str) -> AgentState | None:
         """Look up an agent by its authoritative identifier."""
@@ -121,6 +215,4 @@ class SimulationRuntime:
     def _step_once_locked(self) -> SimulationSnapshot:
         """Advance one tick while the caller holds the runtime lock."""
 
-        self._world_state.tick += 1
-        self._advance_agents()
-        return self._world_state.to_snapshot()
+        return self._world_loop.tick_once()

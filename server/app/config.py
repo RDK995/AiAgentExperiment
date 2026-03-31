@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     world_width: int = Field(default=16, ge=4)
     world_height: int = Field(default=12, ge=4)
     initial_agent_count: int = Field(default=3, ge=1)
+    database_url: str = Field(default="sqlite+pysqlite:///./autonomous_village.db")
+    database_echo: bool = Field(default=False)
 
     model_config = SettingsConfigDict(
         env_file=".env",

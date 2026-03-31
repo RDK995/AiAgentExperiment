@@ -79,7 +79,7 @@ def test_run_for_ticks_holds_runtime_lock_for_entire_batch() -> None:
 
 
 def test_step_once_prevents_agents_from_stacking_on_same_tile() -> None:
-    """Authoritative movement should not allow agents to enter occupied tiles."""
+    """Authoritative movement should avoid stacking while still allowing fallback movement."""
 
     async def run_test() -> None:
         world = build_initial_world_state(width=8, height=6, initial_agent_count=2)
@@ -92,7 +92,8 @@ def test_step_once_prevents_agents_from_stacking_on_same_tile() -> None:
 
         positions = [(agent.position.x, agent.position.y) for agent in snapshot.agents]
         assert len(set(positions)) == len(positions)
-        assert snapshot.agents[0].position.x == 0
-        assert snapshot.agents[1].position.x == 1
+        assert snapshot.agents[0].position != snapshot.agents[1].position
+        assert (snapshot.agents[0].position.x, snapshot.agents[0].position.y) == (0, 2)
+        assert (snapshot.agents[1].position.x, snapshot.agents[1].position.y) == (0, 3)
 
     asyncio.run(run_test())

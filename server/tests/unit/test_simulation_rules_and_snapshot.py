@@ -91,6 +91,36 @@ def test_action_legality_rejects_move_into_occupied_tile(simple_world: WorldStat
     assert is_action_legal(simple_world, agent, action="move", target_x=0, target_y=1) is False
 
 
+def test_world_tick_progression_uses_fallback_wander_destination_when_horizontal_blocked() -> None:
+    """Wander should try another adjacent tile instead of immediately failing."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=3,
+            height=3,
+            agents=[
+                AgentState(agent_id="agent-1", name="Villager 1", x=0, y=1),
+                AgentState(agent_id="agent-2", name="Villager 2", x=1, y=1),
+            ],
+            tiles=[],
+        )
+        for y in range(world.height):
+            for x in range(world.width):
+                from app.engine.world_state import TileState, TerrainType
+
+                world.tiles.append(TileState(x=x, y=y, terrain=TerrainType.GRASS, walkable=True))
+
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=999.0)
+
+        snapshot = await runtime.step_once()
+
+        positions = {agent.agent_id: (agent.position.x, agent.position.y) for agent in snapshot.agents}
+        assert positions["agent-1"] == (0, 0)
+        assert positions["agent-2"] == (0, 1)
+
+    asyncio.run(run_test())
+
+
 def test_snapshot_generation_serializes_authoritative_world_state(
     simple_world: WorldState,
 ) -> None:

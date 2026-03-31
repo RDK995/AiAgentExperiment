@@ -17,6 +17,8 @@ class ReflectionValidator:
 
         for field_name in ("goals", "beliefs", "memory_entries", "planner_hints"):
             values = getattr(result, field_name)
+            if not values:
+                raise ReflectionValidationError(f"{field_name} must contain at least one entry.")
             if len(values) > 5:
                 raise ReflectionValidationError(f"{field_name} exceeded maximum length.")
             if any(not value.strip() for value in values):

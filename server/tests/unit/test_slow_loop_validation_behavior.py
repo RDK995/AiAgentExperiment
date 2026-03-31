@@ -247,6 +247,42 @@ def test_invalid_reflection_output_is_rejected(
     assert all(event.type is not EventType.SLOW_LOOP_COMPLETED for event in replayed_events)
 
 
+def test_empty_reflection_output_is_rejected(
+    simple_world: WorldState,
+    slow_loop_tick: SimTick,
+) -> None:
+    """Empty structured reflection outputs must not consume the slow-loop trigger."""
+
+    empty_result = ReflectionResult(
+        goals=[],
+        beliefs=[],
+        memory_entries=[],
+        planner_hints=[],
+    )
+    slow_loop, _, _, _, _, _, _ = _build_service(reflection_result=empty_result)
+    event_bus = _event_bus_for(
+        SimulationEvent(
+            type=EventType.MAJOR_LIFE_EVENT,
+            tick=slow_loop_tick.tick,
+            sim_time=slow_loop_tick.at,
+            agent_id=simple_world.agents[0].agent_id,
+            payload={"kind": "empty_reflection"},
+        )
+    )
+
+    slow_loop.handle_post_fast_loop(simple_world, slow_loop_tick, event_bus)
+    replayed_events = event_bus.drain()
+
+    assert slow_loop.last_results[0].applied is False
+    assert slow_loop.last_results[0].planner_hints == []
+    assert simple_world.agents[0].current_goal == "Maintain daily routine"
+    assert simple_world.agents[0].beliefs == []
+    assert simple_world.agents[0].memories == []
+    assert simple_world.agents[0].pending_planner_hints == []
+    assert "major_life_event" in simple_world.agents[0].slow_loop_trigger_flags
+    assert all(event.type is not EventType.SLOW_LOOP_COMPLETED for event in replayed_events)
+
+
 def test_valid_reflection_output_writes_goals_beliefs_and_memories(
     simple_world: WorldState,
     slow_loop_tick: SimTick,

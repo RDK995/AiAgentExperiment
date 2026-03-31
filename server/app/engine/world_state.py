@@ -40,6 +40,13 @@ class AgentState:
     thirst: float = 0.0
     fatigue: float = 0.0
     current_action: str = "idle"
+    current_goal: str = "Maintain daily routine"
+    mood: str = "steady"
+    plan_failure_count: int = 0
+    slow_loop_trigger_flags: set[str] = field(default_factory=set)
+    pending_planner_hints: list[str] = field(default_factory=list)
+    beliefs: list[str] = field(default_factory=list)
+    memories: list[str] = field(default_factory=list)
 
     def advance_needs(self) -> None:
         """Apply deterministic need growth for a single simulation tick."""
@@ -72,6 +79,11 @@ class WorldState:
     height: int
     tick: int = 0
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    current_time: datetime = field(default_factory=lambda: datetime(2000, 1, 1, 6, 0, tzinfo=timezone.utc))
+    day_index: int = 0
+    weather: str = "clear"
+    resource_level: float = 100.0
+    crop_growth: float = 0.0
     tiles: list[TileState] = field(default_factory=list)
     agents: list[AgentState] = field(default_factory=list)
 
@@ -97,6 +109,40 @@ class WorldState:
             generated_at=datetime.now(timezone.utc),
         )
 
+    def update_weather(self, now: datetime) -> None:
+        """Deterministically derive a prototype weather state from simulation time."""
+
+        cycle = (now.hour + now.day) % 3
+        self.weather = ["clear", "cloudy", "rain"][cycle]
+
+    def update_resources(self, now: datetime) -> None:
+        """Update prototype world resource levels."""
+
+        delta = 1.0 if 6 <= now.hour < 18 else -0.5
+        self.resource_level = max(0.0, min(200.0, self.resource_level + delta))
+
+    def update_crops(self, now: datetime) -> None:
+        """Update prototype crop growth."""
+
+        growth_delta = 2.0 if self.weather == "rain" else 1.0
+        self.crop_growth = min(100.0, self.crop_growth + growth_delta)
+
+    def terrain_at(self, x: int, y: int) -> str:
+        """Return terrain at a tile coordinate."""
+
+        for tile in self.tiles:
+            if tile.x == x and tile.y == y:
+                return tile.terrain.value
+        return TerrainType.GRASS.value
+
+    def agent_by_id(self, agent_id: str) -> AgentState | None:
+        """Look up an agent by id."""
+
+        for agent in self.agents:
+            if agent.agent_id == agent_id:
+                return agent
+        return None
+
 
 def build_initial_world_state(width: int, height: int, initial_agent_count: int) -> WorldState:
     """Create a simple deterministic starter world for the first vertical slice."""
@@ -121,4 +167,10 @@ def build_initial_world_state(width: int, height: int, initial_agent_count: int)
             )
         )
 
-    return WorldState(width=width, height=height, tiles=tiles, agents=agents)
+    return WorldState(
+        width=width,
+        height=height,
+        day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        tiles=tiles,
+        agents=agents,
+    )

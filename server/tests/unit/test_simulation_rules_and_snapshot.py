@@ -19,7 +19,7 @@ def test_world_tick_progression_advances_authoritative_state(simple_world: World
 
         assert snapshot.tick == 1
         assert snapshot.agents[0].position.x == before_x - 1
-        assert snapshot.agents[0].current_action == "walking"
+        assert snapshot.agents[0].current_action == "wander"
 
     asyncio.run(run_test())
 
@@ -72,6 +72,23 @@ def test_movement_validity_checks_bounds_and_walkability(simple_world: WorldStat
     assert is_movement_valid(simple_world, 2, 0) is False
     assert is_movement_valid(simple_world, -1, 1) is False
     assert is_movement_valid(simple_world, 4, 1) is False
+
+
+def test_action_legality_rejects_move_into_occupied_tile(simple_world: WorldState) -> None:
+    """Movement into another agent's occupied tile should be illegal."""
+
+    simple_world.agents.append(
+        AgentState(
+            agent_id="agent-2",
+            name="Villager 2",
+            x=0,
+            y=1,
+        )
+    )
+
+    agent = simple_world.agents[0]
+
+    assert is_action_legal(simple_world, agent, action="move", target_x=0, target_y=1) is False
 
 
 def test_snapshot_generation_serializes_authoritative_world_state(

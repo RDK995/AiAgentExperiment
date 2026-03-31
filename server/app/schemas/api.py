@@ -2,13 +2,15 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.agent import AgentSnapshot
 
 
 class TileSnapshot(BaseModel):
     """Serialized tile information used by the client renderer."""
+
+    model_config = ConfigDict(extra="forbid")
 
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -19,6 +21,8 @@ class TileSnapshot(BaseModel):
 class WorldSnapshot(BaseModel):
     """Serialized world grid snapshot."""
 
+    model_config = ConfigDict(extra="forbid")
+
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     tiles: list[TileSnapshot]
@@ -26,6 +30,8 @@ class WorldSnapshot(BaseModel):
 
 class SimulationSnapshot(BaseModel):
     """Top-level snapshot emitted by the authoritative simulation backend."""
+
+    model_config = ConfigDict(extra="forbid")
 
     tick: int = Field(ge=0)
     world: WorldSnapshot
@@ -36,11 +42,15 @@ class SimulationSnapshot(BaseModel):
 class RunSimulationRequest(BaseModel):
     """Request payload for advancing the simulation by multiple ticks."""
 
+    model_config = ConfigDict(extra="forbid")
+
     ticks: int = Field(default=1, ge=1, le=100)
 
 
 class MoveAgentRequest(BaseModel):
     """Request payload for a client-submitted movement attempt."""
+
+    model_config = ConfigDict(extra="forbid")
 
     agent_id: str
     target_x: int = Field(ge=0)

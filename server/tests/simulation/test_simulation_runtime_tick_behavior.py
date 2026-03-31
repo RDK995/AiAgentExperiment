@@ -22,7 +22,7 @@ def test_step_once_advances_tick_needs_and_positions() -> None:
         assert second_snapshot.tick == 2
 
         assert first_snapshot.agents[0].position.x == starting_positions[0][0] - 1
-        assert first_snapshot.agents[1].position.x == starting_positions[1][0] + 1
+        assert first_snapshot.agents[1].position.x == starting_positions[1][0] - 1
         assert first_snapshot.agents[0].needs.hunger == 1.5
         assert first_snapshot.agents[0].needs.thirst == 2.0
         assert first_snapshot.agents[0].needs.fatigue == 0.75
@@ -74,5 +74,25 @@ def test_run_for_ticks_holds_runtime_lock_for_entire_batch() -> None:
 
         assert snapshot.tick == 3
         assert counting_lock.acquire_count == 1
+
+    asyncio.run(run_test())
+
+
+def test_step_once_prevents_agents_from_stacking_on_same_tile() -> None:
+    """Authoritative movement should not allow agents to enter occupied tiles."""
+
+    async def run_test() -> None:
+        world = build_initial_world_state(width=8, height=6, initial_agent_count=2)
+        world.agents[0].x = 0
+        world.agents[1].x = 1
+
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=999.0)
+
+        snapshot = await runtime.step_once()
+
+        positions = [(agent.position.x, agent.position.y) for agent in snapshot.agents]
+        assert len(set(positions)) == len(positions)
+        assert snapshot.agents[0].position.x == 0
+        assert snapshot.agents[1].position.x == 1
 
     asyncio.run(run_test())

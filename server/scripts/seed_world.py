@@ -1,0 +1,1 @@
+"""Seed world data placeholder."""

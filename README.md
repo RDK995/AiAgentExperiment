@@ -1,27 +1,22 @@
-# AiAgentExperiment
+# Autonomous Village
 
-## Repository Layout
+Monorepo scaffold for an AI village simulator with a Godot client, a Python simulation backend, project docs, and ops tooling.
 
-- `client-godot/`: Godot client project and game-facing content.
-- `server/`: Python backend for simulation, cognition, and persistence.
-- `docs/`: Architecture and design documentation.
-- `ops/`: Observability and operational stack configs.
+## Top-Level Layout
 
-## Service Boundaries
+- `client-godot/`: Godot project for rendering, UI, and local interaction.
+- `server/`: Authoritative simulation, cognition, memory, API, and telemetry services.
+- `docs/`: Living design documents for architecture, rules, memory, API contracts, and prompts.
+- `ops/`: Monitoring and observability stack placeholders.
 
-The system is split into two clear runtime responsibilities:
+## Initial Goal
 
-1. **Godot client (`client-godot/`)**
-   - Acts as the **renderer and user interface**.
-   - Handles presentation, input capture, scene composition, and local UX behavior.
-   - Does **not** own canonical world state.
+This repository currently provides the base folder structure for:
 
-2. **Python backend (`server/`)**
-   - Acts as the **authoritative engine** for:
-     - Simulation
-     - Agent cognition/decision logic
-     - Persistence and memory storage
-   - Owns and validates canonical game/simulation state.
-   - Exposes contracts consumed by the client.
+- world simulation
+- autonomous agent behavior
+- memory and cognition pipelines
+- social systems and family lifecycle mechanics
+- telemetry, replay, and debugging
 
-The intended architecture keeps authoritative logic server-side while the Godot runtime remains focused on visualization and interaction.
+The next step is to flesh out the server runtime and connect the Godot client to the simulation API.

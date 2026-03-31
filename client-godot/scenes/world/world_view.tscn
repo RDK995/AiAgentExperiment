@@ -1,0 +1,18 @@
+[gd_scene load_steps=5 format=3 uid="uid://d4es0jbgbcexv"]
+
+[ext_resource type="Script" path="res://scripts/world/world_snapshot_consumer.gd" id="1_qcf2w"]
+[ext_resource type="Script" path="res://scripts/networking/snapshot_client.gd" id="2_hr1ep"]
+[ext_resource type="Script" path="res://scripts/world/tile_world_renderer.gd" id="3_e2kgj"]
+[ext_resource type="Script" path="res://scripts/agents/agent_sprite_renderer.gd" id="4_0nhz2"]
+
+[node name="WorldView" type="Node2D"]
+script = ExtResource("1_qcf2w")
+
+[node name="SnapshotClient" type="Node" parent="."]
+script = ExtResource("2_hr1ep")
+
+[node name="TileWorldRenderer" type="Node2D" parent="."]
+script = ExtResource("3_e2kgj")
+
+[node name="AgentSpriteRenderer" type="Node2D" parent="."]
+script = ExtResource("4_0nhz2")

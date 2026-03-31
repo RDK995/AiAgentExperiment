@@ -6,3 +6,4 @@ __pycache__/
 client-godot/.godot/
 server/.venv/
 server/*.egg-info/
+autonomous_village.db

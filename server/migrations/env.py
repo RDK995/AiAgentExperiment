@@ -8,6 +8,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.config import get_settings
+from app.db.alembic_config import resolve_alembic_database_url
 from app.db.base import Base, import_models
 
 config = context.config
@@ -17,8 +18,10 @@ if config.config_file_name is not None:
 
 settings = get_settings()
 configured_url = config.get_main_option("sqlalchemy.url")
-if not configured_url:
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option(
+    "sqlalchemy.url",
+    resolve_alembic_database_url(configured_url, settings.database_url),
+)
 import_models()
 target_metadata = Base.metadata
 

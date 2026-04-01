@@ -31,6 +31,7 @@ from app.db.repositories import (
     WorldEventCreateParams,
     WorldRepository,
 )
+from app.schemas.event import WorldEventSchema
 
 
 @pytest.fixture
@@ -347,6 +348,43 @@ def test_world_repository_creates_world_events_with_payload_and_actor_ids(db_ses
     assert fetched is not None
     assert fetched.actor_ids == [actor.id]
     assert fetched.payload == {"severity": "high", "wind": 3}
+
+
+def test_world_repository_lists_world_events_as_transport_dtos(db_session: Session) -> None:
+    """The world repository should expose persisted world events as transport-safe DTOs."""
+
+    agent_repository = AgentRepository(db_session)
+    world_repository = WorldRepository(db_session)
+    actor = agent_repository.create_agent_bundle(
+        AgentCreateParams(
+            name="Gio",
+            sex=AgentSex.MALE,
+            birth_tick=0,
+            current_tile_x=2,
+            current_tile_y=2,
+            stage_of_life=StageOfLife.ADULT,
+        )
+    )
+
+    world_repository.create_world_event(
+        WorldEventCreateParams(
+            tick=61,
+            event_type="warehouse_fire",
+            actor_ids=[actor.id],
+            target_ids=[],
+            location_x=2,
+            location_y=2,
+            payload={"severity": "medium"},
+        )
+    )
+    db_session.commit()
+
+    events = world_repository.list_world_events()
+
+    assert len(events) == 1
+    assert isinstance(events[0], WorldEventSchema)
+    assert events[0].actor_ids == [str(actor.id)]
+    assert events[0].payload == {"severity": "medium"}
 
 
 def test_goal_repository_raises_for_unknown_goal(db_session: Session) -> None:

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.engine.scheduler import ScheduledTask
 from app.engine.tick_loop import SimulationRuntime
 from app.engine.world_state import WorldState, build_initial_world_state
+from app.schemas.agent import AgentStateSnapshot
 from app.schemas.event import EventType, SimulationEvent
 
 
@@ -109,6 +110,24 @@ def test_runtime_external_event_is_consumed_by_slow_loop_on_next_tick() -> None:
     asyncio.run(run_test())
 
 
+def test_runtime_agent_detail_services_return_typed_snapshots() -> None:
+    """The runtime service should return rich typed agent snapshot DTOs, not raw dicts."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        collection = await runtime.get_agent_snapshots()
+        single = await runtime.get_agent_snapshot("agent-1")
+
+        assert collection
+        assert all(isinstance(snapshot, AgentStateSnapshot) for snapshot in collection)
+        assert isinstance(single, AgentStateSnapshot)
+        assert single.agent_id == "agent-1"
+        assert single.stage_of_life == "adult"
+
+    asyncio.run(run_test())
+
+
 def test_tick_and_run_endpoints_advance_authoritative_state_end_to_end(client: TestClient) -> None:
     """The FastAPI tick and run endpoints should mutate authoritative backend state."""
 
@@ -139,6 +158,45 @@ def test_snapshot_and_state_endpoints_reflect_same_authoritative_backend_state(
     assert state["tick"] == 2
     assert snapshot["world"] == state["world"]
     assert snapshot["agents"] == state["agents"]
+
+
+def test_agent_detail_endpoints_return_richer_typed_snapshot_contracts(client: TestClient) -> None:
+    """Agent detail endpoints should expose the richer backend-facing snapshot DTOs."""
+
+    collection = client.get("/api/v1/world/agents")
+    single = client.get("/api/v1/world/agents/agent-1")
+
+    assert collection.status_code == 200
+    assert single.status_code == 200
+
+    collection_payload = collection.json()
+    single_payload = single.json()
+
+    assert len(collection_payload) >= 1
+    assert single_payload["agent_id"] == "agent-1"
+    assert single_payload["stage_of_life"] == "adult"
+    assert single_payload["tile_x"] >= 0
+    assert single_payload["tile_y"] >= 0
+    assert set(single_payload["needs"].keys()) == {
+        "hunger",
+        "thirst",
+        "fatigue",
+        "warmth",
+        "health",
+        "stress",
+        "loneliness",
+        "safety",
+    }
+    assert set(single_payload["mood"].keys()) == {"hope", "grief", "morale", "shame"}
+
+
+def test_agent_detail_endpoint_returns_404_for_unknown_agent(client: TestClient) -> None:
+    """Unknown agents should fail cleanly on the richer detail endpoint."""
+
+    response = client.get("/api/v1/world/agents/unknown-agent")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unknown agent 'unknown-agent'."
 
 
 def _build_runtime() -> SimulationRuntime:

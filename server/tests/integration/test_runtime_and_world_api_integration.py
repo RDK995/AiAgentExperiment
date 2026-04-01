@@ -12,6 +12,16 @@ from app.engine.tick_loop import SimulationRuntime
 from app.engine.world_state import WorldState, build_initial_world_state
 from app.schemas.agent import AgentStateSnapshot
 from app.schemas.event import EventType, SimulationEvent
+from app.schemas.api import (
+    AgentInspectResponse,
+    BeliefsResponse,
+    EpisodesResponse,
+    ForceReflectResponse,
+    GoalsResponse,
+    RelationshipsResponse,
+    ReplayResponse,
+    TimelineResponse,
+)
 
 
 def test_runtime_step_once_updates_authoritative_state_end_to_end() -> None:
@@ -128,6 +138,35 @@ def test_runtime_agent_detail_services_return_typed_snapshots() -> None:
     asyncio.run(run_test())
 
 
+def test_runtime_auxiliary_services_return_typed_endpoint_contracts() -> None:
+    """The runtime should expose typed response models for the newer endpoint groups."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        reflection = await runtime.force_reflect("agent-1")
+        relationships = await runtime.get_agent_relationships("agent-1")
+        goals = await runtime.get_agent_goals("agent-1")
+        timeline = await runtime.get_agent_timeline("agent-1")
+        episodes = await runtime.get_memory_episodes("agent-1")
+        beliefs = await runtime.get_memory_beliefs("agent-1")
+        replay = await runtime.get_replay_events()
+        inspect_agent = await runtime.inspect_agent("agent-1")
+
+        assert isinstance(reflection, ForceReflectResponse)
+        assert isinstance(relationships, RelationshipsResponse)
+        assert isinstance(goals, GoalsResponse)
+        assert isinstance(timeline, TimelineResponse)
+        assert isinstance(episodes, EpisodesResponse)
+        assert isinstance(beliefs, BeliefsResponse)
+        assert isinstance(replay, ReplayResponse)
+        assert isinstance(inspect_agent, AgentInspectResponse)
+        assert reflection.agent_id == "agent-1"
+        assert inspect_agent.agent.agent_id == "agent-1"
+
+    asyncio.run(run_test())
+
+
 def test_tick_and_run_endpoints_advance_authoritative_state_end_to_end(client: TestClient) -> None:
     """The FastAPI tick and run endpoints should mutate authoritative backend state."""
 
@@ -172,7 +211,7 @@ def test_agent_detail_endpoints_return_richer_typed_snapshot_contracts(client: T
     collection_payload = collection.json()
     single_payload = single.json()
 
-    assert len(collection_payload) >= 1
+    assert len(collection_payload["agents"]) >= 1
     assert single_payload["agent_id"] == "agent-1"
     assert single_payload["stage_of_life"] == "adult"
     assert single_payload["tile_x"] >= 0
@@ -196,7 +235,10 @@ def test_agent_detail_endpoint_returns_404_for_unknown_agent(client: TestClient)
     response = client.get("/api/v1/world/agents/unknown-agent")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Unknown agent 'unknown-agent'."
+    assert response.json() == {
+        "error": "not_found",
+        "message": "Unknown agent 'unknown-agent'.",
+    }
 
 
 def _build_runtime() -> SimulationRuntime:

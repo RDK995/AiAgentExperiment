@@ -89,7 +89,10 @@ def test_illegal_actions_are_rejected_server_side(client: TestClient) -> None:
     )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Illegal move for current world state."}
+    assert response.json() == {
+        "error": "conflict",
+        "message": "Illegal move for current world state.",
+    }
 
     after = client.get("/api/v1/world/snapshot").json()
     assert _without_generated_at(after) == _without_generated_at(before)

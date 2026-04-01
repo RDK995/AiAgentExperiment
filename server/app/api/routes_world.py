@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.engine.tick_loop import SimulationRuntime
+from app.schemas.agent import AgentStateSnapshot
 from app.schemas.api import MoveAgentRequest, RunSimulationRequest, SimulationSnapshot
 
 router = APIRouter(prefix="/world", tags=["world"])
@@ -28,6 +29,28 @@ async def get_world_state(request: Request) -> SimulationSnapshot:
 
     runtime = get_runtime(request)
     return await runtime.get_snapshot()
+
+
+@router.get("/agents", response_model=list[AgentStateSnapshot])
+async def get_agent_snapshots(request: Request) -> list[AgentStateSnapshot]:
+    """Return richer backend-facing snapshots for all authoritative agents."""
+
+    runtime = get_runtime(request)
+    return await runtime.get_agent_snapshots()
+
+
+@router.get("/agents/{agent_id}", response_model=AgentStateSnapshot)
+async def get_agent_snapshot(agent_id: str, request: Request) -> AgentStateSnapshot:
+    """Return a richer backend-facing snapshot for a specific authoritative agent."""
+
+    runtime = get_runtime(request)
+    try:
+        return await runtime.get_agent_snapshot(agent_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/tick", response_model=SimulationSnapshot)

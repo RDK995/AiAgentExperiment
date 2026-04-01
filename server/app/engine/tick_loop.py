@@ -26,6 +26,7 @@ from app.engine.world_state import AgentState, WorldState
 from app.memory.retriever import MemoryRetriever
 from app.memory.writer import MemoryWriter
 from app.schemas.api import SimulationSnapshot
+from app.schemas.agent import AgentStateSnapshot
 from app.schemas.event import EventType, SimulationEvent
 from app.telemetry.metrics import TelemetryRecorder
 
@@ -112,6 +113,21 @@ class SimulationRuntime:
 
         async with self._lock:
             return self._world_state.to_snapshot()
+
+    async def get_agent_snapshots(self) -> list[AgentStateSnapshot]:
+        """Return richer backend-facing snapshots for all authoritative agents."""
+
+        async with self._lock:
+            return [agent.to_state_snapshot() for agent in self._world_state.agents]
+
+    async def get_agent_snapshot(self, agent_id: str) -> AgentStateSnapshot:
+        """Return a richer backend-facing snapshot for one authoritative agent."""
+
+        async with self._lock:
+            agent = self._get_agent(agent_id)
+            if agent is None:
+                raise LookupError(f"Unknown agent '{agent_id}'.")
+            return agent.to_state_snapshot()
 
     async def run_for_ticks(self, ticks: int) -> SimulationSnapshot:
         """Advance the simulation by a fixed number of authoritative ticks."""

@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
-from app.schemas.agent import AgentNeedState, AgentSnapshot
+from app.db.enums import StageOfLife
+from app.schemas.agent import AgentNeedState, AgentSnapshot, AgentStateSnapshot, MoodSchema, NeedsSchema
 from app.schemas.api import SimulationSnapshot, TileSnapshot
 
 
@@ -39,6 +40,18 @@ class AgentState:
     hunger: float = 0.0
     thirst: float = 0.0
     fatigue: float = 0.0
+    warmth: float = 100.0
+    health: float = 100.0
+    stress: float = 0.0
+    loneliness: float = 0.0
+    safety: float = 100.0
+    hope: float = 50.0
+    grief: float = 0.0
+    morale: float = 50.0
+    shame: float = 0.0
+    stage_of_life: StageOfLife = StageOfLife.ADULT
+    household_id: str | None = None
+    partner_id: str | None = None
     current_action: str = "idle"
     current_goal: str = "Maintain daily routine"
     mood: str = "steady"
@@ -68,6 +81,37 @@ class AgentState:
                 fatigue=self.fatigue,
             ),
             current_action=self.current_action,
+        )
+
+    def to_state_snapshot(self) -> AgentStateSnapshot:
+        """Convert authoritative state into the richer backend inspection schema."""
+
+        return AgentStateSnapshot(
+            agent_id=self.agent_id,
+            name=self.name,
+            stage_of_life=self.stage_of_life,
+            tile_x=self.x,
+            tile_y=self.y,
+            current_action=self.current_action,
+            current_goal=self.current_goal,
+            needs=NeedsSchema(
+                hunger=self.hunger,
+                thirst=self.thirst,
+                fatigue=self.fatigue,
+                warmth=self.warmth,
+                health=self.health,
+                stress=self.stress,
+                loneliness=self.loneliness,
+                safety=self.safety,
+            ),
+            mood=MoodSchema(
+                hope=self.hope,
+                grief=self.grief,
+                morale=self.morale,
+                shame=self.shame,
+            ),
+            household_id=self.household_id,
+            partner_id=self.partner_id,
         )
 
 

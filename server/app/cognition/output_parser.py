@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from app.schemas.reflection import ReflectionResult
+from app.schemas.reflection import ReflectionOutput, ReflectionResult
 
 
 class ReflectionOutputParser:
     """Parse model outputs into structured reflection results."""
 
-    def parse(self, output: ReflectionResult) -> ReflectionResult:
-        """The prototype workflow already returns structured outputs."""
+    def parse(self, output: ReflectionResult | ReflectionOutput) -> ReflectionResult:
+        """Normalize reflection outputs into the legacy slow-loop result contract."""
 
-        return output
+        if isinstance(output, ReflectionResult):
+            return output
+
+        return output.to_reflection_result()

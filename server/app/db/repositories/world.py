@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Inventory, WorldEvent
+from app.schemas.event import WorldEventSchema
 
 
 @dataclass(slots=True)
@@ -49,6 +51,26 @@ class WorldRepository:
             payload=params.payload,
         )
         return self.add_world_event(world_event)
+
+    def serialize_world_event(self, world_event: WorldEvent) -> WorldEventSchema:
+        """Convert a persisted world event row into the API-safe DTO."""
+
+        return WorldEventSchema(
+            event_id=str(world_event.id),
+            tick=world_event.tick,
+            event_type=world_event.event_type,
+            actor_ids=[str(actor_id) for actor_id in world_event.actor_ids],
+            target_ids=[str(target_id) for target_id in world_event.target_ids],
+            location_x=world_event.location_x,
+            location_y=world_event.location_y,
+            payload=world_event.payload,
+        )
+
+    def list_world_events(self, *, limit: int = 100) -> list[WorldEventSchema]:
+        """List persisted world events as transport-safe DTOs."""
+
+        statement = select(WorldEvent).order_by(WorldEvent.tick.desc(), WorldEvent.id).limit(limit)
+        return [self.serialize_world_event(world_event) for world_event in self._session.scalars(statement)]
 
     def add_inventory_entry(self, inventory: Inventory) -> Inventory:
         """Persist an inventory row."""

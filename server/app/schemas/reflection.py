@@ -90,7 +90,11 @@ class ReflectionOutput(BaseModel):
                 )
 
         return ReflectionResult(
-            goals=[goal.title for goal in self.goal_updates],
+            goals=[
+                goal.title
+                for goal in self.goal_updates
+                if goal.action in {"create", "reprioritize"}
+            ],
             beliefs=beliefs,
             memory_entries=[memory.text for memory in self.memory_candidates],
             planner_hints=list(self.tomorrow_intentions),

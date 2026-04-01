@@ -619,6 +619,41 @@ def test_reflection_output_converts_to_legacy_reflection_result() -> None:
     )
 
 
+def test_reflection_output_skips_non_active_goal_actions_in_legacy_adaptation() -> None:
+    """Legacy adaptation should not treat complete/abandon updates as active goals."""
+
+    output = ReflectionOutput(
+        summary="Some goals changed status today.",
+        goal_updates=[
+            GoalUpdate(
+                action="complete",
+                goal_type=GoalType.SAFETY,
+                title="Repair the fence",
+                priority=1.0,
+                horizon_days=0,
+            ),
+            GoalUpdate(
+                action="abandon",
+                goal_type=GoalType.FAMILY,
+                title="Visit the old orchard",
+                priority=0.5,
+                horizon_days=2,
+            ),
+            GoalUpdate(
+                action="reprioritize",
+                goal_type=GoalType.EXPLORATION,
+                title="Scout the riverbank",
+                priority=2.0,
+                horizon_days=1,
+            ),
+        ],
+    )
+
+    result = output.to_reflection_result()
+
+    assert result.goals == ["Scout the riverbank"]
+
+
 def test_reflection_output_parser_accepts_structured_and_legacy_outputs() -> None:
     """The parser should pass through legacy results and adapt structured outputs."""
 

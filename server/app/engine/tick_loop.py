@@ -6,6 +6,7 @@ import asyncio
 from datetime import timedelta
 
 from app.agents.executor import ActionExecutor
+from app.agents.lifecycle import LifecycleService
 from app.agents.needs import NeedService
 from app.agents.perception import PerceptionService
 from app.agents.planner import ActionPlanner
@@ -22,7 +23,7 @@ from app.engine.rules.simulation_rules import is_action_legal
 from app.engine.scheduler import TaskScheduler
 from app.engine.sim_clock import SimulationClock
 from app.engine.world_loop import WorldLoop
-from app.engine.world_state import AgentState, WorldState, build_initial_world_state
+from app.engine.world_state import AgentState, ItemStackState, WorldState, build_initial_world_state
 from app.memory.retriever import MemoryRetriever
 from app.memory.writer import MemoryWriter
 from app.schemas.api import (
@@ -88,6 +89,7 @@ class SimulationRuntime:
             planner=ActionPlanner(),
             executor=ActionExecutor(),
             slow_loop_service=self._slow_loop_service,
+            lifecycle_service=LifecycleService(),
         )
         self._world_loop = WorldLoop(
             world_state=self._world_state,
@@ -418,6 +420,14 @@ class SimulationRuntime:
         """Increase prototype world resources at a specific location."""
 
         async with self._lock:
+            self._world_state.items.append(
+                ItemStackState(
+                    item_type=item_type,
+                    x=tile_x,
+                    y=tile_y,
+                    quantity=quantity,
+                )
+            )
             self._world_state.resource_level += float(quantity)
             return SpawnFoodResponse(
                 status="spawned",
@@ -488,12 +498,19 @@ class SimulationRuntime:
                     {
                         "agent_id": trace.agent_id,
                         "stage_order": list(trace.stage_order),
+                        "perception_summary": dict(trace.perception_summary),
+                        "top_action_candidates": [dict(candidate) for candidate in trace.top_action_candidates],
                         "selected_action": trace.selected_action,
+                        "planned_tasks": list(trace.planned_tasks),
                         "planner_hints_before": list(trace.planner_hints_before),
                         "planner_hints_after": list(trace.planner_hints_after),
+                        "emitted_event_types": list(trace.emitted_event_types),
                     }
                     for trace in self._agent_runtime.last_step_traces
                 ],
+                "last_fast_loop_event_types": list(self._agent_runtime.last_fast_loop_event_types),
+                "last_lifecycle_event_types": list(self._agent_runtime.last_lifecycle_event_types),
+                "last_slow_loop_event_types": list(self._agent_runtime.last_slow_loop_event_types),
                 "last_slow_loop_results": [
                     {
                         "agent_id": result.agent_id,

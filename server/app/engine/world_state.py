@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
-from app.db.enums import StageOfLife
+from app.db.enums import AgentSex, StageOfLife
 from app.schemas.agent import AgentNeedState, AgentSnapshot, AgentStateSnapshot, MoodSchema, NeedsSchema
 from app.schemas.api import SimulationSnapshot, TileSnapshot
 
@@ -30,6 +31,27 @@ class TileState:
 
 
 @dataclass(slots=True)
+class ItemStackState:
+    """Simple world item stack visible to perception and task execution."""
+
+    item_type: str
+    x: int
+    y: int
+    quantity: int = 1
+
+
+@dataclass(slots=True)
+class ResourceNodeState:
+    """Simple resource node visible to perception and utility scoring."""
+
+    resource_type: str
+    x: int
+    y: int
+    quantity: int = 1
+    threat_level: float = 0.0
+
+
+@dataclass(slots=True)
 class AgentState:
     """Authoritative agent state stored by the simulation."""
 
@@ -37,6 +59,7 @@ class AgentState:
     name: str
     x: int
     y: int
+    sex: AgentSex = AgentSex.INTERSEX
     hunger: float = 0.0
     thirst: float = 0.0
     fatigue: float = 0.0
@@ -50,6 +73,8 @@ class AgentState:
     morale: float = 50.0
     shame: float = 0.0
     stage_of_life: StageOfLife = StageOfLife.ADULT
+    age_ticks: int = 2_000
+    alive: bool = True
     household_id: str | None = None
     partner_id: str | None = None
     current_action: str = "idle"
@@ -60,6 +85,12 @@ class AgentState:
     pending_planner_hints: list[str] = field(default_factory=list)
     beliefs: list[str] = field(default_factory=list)
     memories: list[str] = field(default_factory=list)
+    is_threat: bool = False
+    has_infant_care_duty: bool = False
+    pregnancy_progress_ticks: int | None = None
+    pregnancy_partner_id: str | None = None
+    current_task_payload: dict[str, Any] | None = None
+    task_queue: list[dict[str, Any]] = field(default_factory=list)
 
     def advance_needs(self) -> None:
         """Apply deterministic need growth for a single simulation tick."""
@@ -130,6 +161,8 @@ class WorldState:
     crop_growth: float = 0.0
     tiles: list[TileState] = field(default_factory=list)
     agents: list[AgentState] = field(default_factory=list)
+    items: list[ItemStackState] = field(default_factory=list)
+    resources: list[ResourceNodeState] = field(default_factory=list)
 
     def to_snapshot(self) -> SimulationSnapshot:
         """Serialize the world into a transport-safe snapshot contract."""
@@ -186,6 +219,11 @@ class WorldState:
             if agent.agent_id == agent_id:
                 return agent
         return None
+
+    def next_agent_id(self) -> str:
+        """Generate the next deterministic agent identifier."""
+
+        return f"agent-{len(self.agents) + 1}"
 
 
 def build_initial_world_state(width: int, height: int, initial_agent_count: int) -> WorldState:

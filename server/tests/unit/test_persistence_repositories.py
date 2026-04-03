@@ -387,6 +387,74 @@ def test_world_repository_lists_world_events_as_transport_dtos(db_session: Sessi
     assert events[0].payload == {"severity": "medium"}
 
 
+def test_world_repository_lists_events_in_descending_tick_order_with_limit(db_session: Session) -> None:
+    """Recent world events should come back newest-first and respect the requested limit."""
+
+    world_repository = WorldRepository(db_session)
+
+    world_repository.create_world_event(
+        WorldEventCreateParams(
+            tick=10,
+            event_type="task_started",
+            payload={"task": "move_to"},
+        )
+    )
+    world_repository.create_world_event(
+        WorldEventCreateParams(
+            tick=12,
+            event_type="action_executed",
+            payload={"action": "drink"},
+        )
+    )
+    world_repository.create_world_event(
+        WorldEventCreateParams(
+            tick=11,
+            event_type="task_completed",
+            payload={"task": "fetch_water"},
+        )
+    )
+    db_session.commit()
+
+    events = world_repository.list_world_events(limit=2)
+
+    assert [event.tick for event in events] == [12, 11]
+    assert [event.event_type for event in events] == ["action_executed", "task_completed"]
+
+
+def test_world_repository_serializes_location_targets_and_nested_payload(db_session: Session) -> None:
+    """World-event DTOs should preserve engine-style location fields and nested payload structure."""
+
+    world_repository = WorldRepository(db_session)
+    actor_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+
+    created = world_repository.create_world_event(
+        WorldEventCreateParams(
+            tick=77,
+            event_type="birth",
+            actor_ids=[actor_id],
+            target_ids=[target_id],
+            location_x=4,
+            location_y=5,
+            payload={"child": {"name": "Child 1"}, "household": {"id": "house-1"}},
+        )
+    )
+    db_session.commit()
+
+    serialized = world_repository.serialize_world_event(created)
+
+    assert serialized == WorldEventSchema(
+        event_id=str(created.id),
+        tick=77,
+        event_type="birth",
+        actor_ids=[str(actor_id)],
+        target_ids=[str(target_id)],
+        location_x=4,
+        location_y=5,
+        payload={"child": {"name": "Child 1"}, "household": {"id": "house-1"}},
+    )
+
+
 def test_goal_repository_raises_for_unknown_goal(db_session: Session) -> None:
     """Updating an unknown goal should fail loudly instead of silently doing nothing."""
 

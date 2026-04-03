@@ -105,6 +105,31 @@ def test_executor_consumes_food_items_from_authoritative_world() -> None:
     assert any(event.type is EventType.TASK_COMPLETED for event in events)
 
 
+def test_executor_fails_when_food_resource_node_is_already_depleted() -> None:
+    """Zero-quantity food nodes should not be gatherable forever."""
+
+    world = _make_world()
+    agent = world.agents[0]
+    world.resources = [ResourceNodeState(resource_type="berries", x=1, y=1, quantity=0)]
+    agent.x = 1
+    agent.y = 1
+    agent.hunger = 20.0
+
+    events = ActionExecutor().execute(
+        world,
+        agent,
+        SelectedAction(action_type=ActionType.GATHER_FOOD, tasks=[PlannedTask(TaskType.GATHER_FOOD)]),
+        tick=1,
+        now=datetime(2000, 1, 1, 8, 0, tzinfo=timezone.utc),
+        event_bus=EventBus(),
+    )
+
+    assert agent.hunger == 20.0
+    assert world.resources[0].quantity == 0
+    assert any(event.type is EventType.PLAN_FAILED for event in events)
+    assert not any(event.type is EventType.TASK_COMPLETED for event in events)
+
+
 def test_executor_emits_task_started_and_progress_for_move_tasks() -> None:
     """Movement tasks should emit start and progress events before completion."""
 

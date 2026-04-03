@@ -332,6 +332,8 @@ class ActionExecutor:
 
         for resource in world.resources:
             if (resource.x, resource.y) == (agent.x, agent.y) and resource.resource_type in {"berries", "field", "orchard", "fish"}:
+                if resource.quantity <= 0:
+                    return False
                 resource.quantity = max(0, resource.quantity - 1)
                 return True
 

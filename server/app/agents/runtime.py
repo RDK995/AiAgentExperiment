@@ -133,14 +133,21 @@ class AgentRuntime:
     def _consume_planner_hints(agent: AgentState, selected_action: str) -> None:
         """Consume planner hints once they influence the chosen fast-loop action."""
 
-        action_to_hint = {
-            "eat": "eat_soon",
-            "drink": "drink_soon",
-            "rest": "rest_soon",
+        action_to_hints = {
+            "eat": ["eat_soon", "focus_on_recovery", "prioritize_food_security"],
+            "drink": ["drink_soon", "focus_on_recovery"],
+            "rest": ["rest_soon", "focus_on_recovery"],
+            "gather_food": ["prioritize_food_security", "gather_resources"],
+            "fetch_water": ["gather_resources", "focus_on_recovery"],
+            "work_field": ["gather_resources", "prioritize_food_security"],
+            "socialize": ["visit_partner"],
+            "court": ["visit_partner"],
+            "wander": ["reflect_on_failures"],
         }
-        matched_hint = action_to_hint.get(selected_action)
-        if matched_hint and matched_hint in agent.pending_planner_hints:
-            agent.pending_planner_hints.remove(matched_hint)
+        for matched_hint in action_to_hints.get(selected_action, []):
+            if matched_hint in agent.pending_planner_hints:
+                agent.pending_planner_hints.remove(matched_hint)
+                break
 
     @staticmethod
     def _summarize_perception(context: PerceptionResult) -> dict[str, Any]:

@@ -9,6 +9,7 @@ from app.schemas.api import (
     AgentInspectResponse,
     DebugMetricsResponse,
     HouseholdInspectResponse,
+    ReflectionRunsResponse,
     ReplayResponse,
 )
 
@@ -30,6 +31,16 @@ async def get_replay(
     """Return recent authoritative events in replay-friendly form."""
 
     return await runtime.get_replay_events(limit=limit)
+
+
+@router.get("/reflections", response_model=ReflectionRunsResponse)
+async def get_reflections(
+    limit: int = Query(default=20, ge=1, le=100),
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> ReflectionRunsResponse:
+    """Return recent reflection workflow executions for debugging."""
+
+    return await runtime.get_recent_reflections(limit=limit)
 
 
 @router.get("/inspect/agent/{agent_id}", response_model=AgentInspectResponse, responses=error_responses(404))

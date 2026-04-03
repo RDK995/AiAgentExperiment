@@ -57,6 +57,8 @@ from app.schemas.api import (
     MemoryEpisodeSummary,
     MemoryRetrieveResponse,
     MemorySummarizeResponse,
+    ReflectionRunsResponse,
+    ReflectionRunSummary,
     RelationshipsResponse,
     RelationshipSummary,
     ReplayResponse,
@@ -95,6 +97,7 @@ class SimulationRuntime:
         self._telemetry = TelemetryRecorder()
         self._replay_log = ReplayEventLog(max_events=200)
         self._recent_events: list[SimulationEvent] = []
+        self._recent_reflections = []
         self._memory_retriever = MemoryRetriever()
         self._memory_embedding_provider = memory_embedding_provider
         autobiography_builder = AutobiographyBuilder()
@@ -338,6 +341,9 @@ class SimulationRuntime:
                 applied=result.applied if result is not None else False,
                 planner_hints=list(result.planner_hints) if result is not None else [],
                 trigger_reasons=list(result.trigger_reasons) if result is not None else [],
+                completed_stages=list(result.completed_stages) if result is not None else [],
+                failure_stage=result.failure_stage if result is not None else None,
+                validation_errors=list(result.validation_errors) if result is not None else [],
             )
 
     async def get_memory_episodes(self, agent_id: str) -> EpisodesResponse:
@@ -440,6 +446,26 @@ class SimulationRuntime:
                         payload=dict(event.payload),
                     )
                     for index, event in enumerate(recent)
+                ]
+            )
+
+    async def get_recent_reflections(self, limit: int = 20) -> ReflectionRunsResponse:
+        """Return recent reflection workflow executions for debugging."""
+
+        async with self._lock:
+            recent = self._recent_reflections[-limit:]
+            return ReflectionRunsResponse(
+                reflections=[
+                    ReflectionRunSummary(
+                        agent_id=result.agent_id,
+                        trigger_reasons=list(result.trigger_reasons),
+                        applied=result.applied,
+                        planner_hints=list(result.planner_hints),
+                        completed_stages=list(result.completed_stages),
+                        failure_stage=result.failure_stage,
+                        validation_errors=list(result.validation_errors),
+                    )
+                    for result in recent
                 ]
             )
 
@@ -594,6 +620,9 @@ class SimulationRuntime:
                         "trigger_reasons": list(result.trigger_reasons),
                         "applied": result.applied,
                         "planner_hints": list(result.planner_hints),
+                        "completed_stages": list(result.completed_stages),
+                        "failure_stage": result.failure_stage,
+                        "validation_errors": list(result.validation_errors),
                     }
                     for result in self._slow_loop_service.last_results
                 ],
@@ -609,6 +638,14 @@ class SimulationRuntime:
                     else None
                 ),
             }
+
+    def _record_reflection_results(self) -> None:
+        """Append bounded recent reflection executions for debug/audit inspection."""
+
+        if not self._slow_loop_service.last_results:
+            return
+        self._recent_reflections.extend(self._slow_loop_service.last_results)
+        self._recent_reflections = self._recent_reflections[-100:]
 
     def _get_agent(self, agent_id: str) -> AgentState | None:
         """Look up an agent by its authoritative identifier."""
@@ -630,6 +667,7 @@ class SimulationRuntime:
         """Advance one tick while the caller holds the runtime lock."""
 
         snapshot = self._world_loop.tick_once()
+        self._record_reflection_results()
         if self._telemetry.last_flushed_events:
             self._replay_log.record(self._telemetry.last_flushed_events[-1])
         self._recent_events = self._replay_log.recent_events(limit=200)
@@ -648,6 +686,7 @@ class SimulationRuntime:
         self._replay_log = ReplayEventLog(max_events=200)
         self._event_bus = self._build_event_bus()
         self._recent_events = []
+        self._recent_reflections = []
         self._sim_clock = SimulationClock(
             start_time=self._world_state.current_time,
             tick_interval=timedelta(seconds=self._tick_interval_seconds),

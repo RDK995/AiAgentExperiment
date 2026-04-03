@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event as sqlalchemy_event, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.cognition.reflection import ReflectionWorkflow
 from app.db.base import Base, import_models
 from app.db.models import WorldEvent
 from app.engine.scheduler import ScheduledTask
@@ -24,10 +25,12 @@ from app.schemas.api import (
     EpisodesResponse,
     ForceReflectResponse,
     GoalsResponse,
+    ReflectionRunsResponse,
     RelationshipsResponse,
     ReplayResponse,
     TimelineResponse,
 )
+from app.schemas.reflection import ReflectionContext, ReflectionResult
 
 
 def test_runtime_step_once_updates_authoritative_state_end_to_end() -> None:
@@ -126,6 +129,30 @@ def test_runtime_external_event_is_consumed_by_slow_loop_on_next_tick() -> None:
     asyncio.run(run_test())
 
 
+def test_runtime_repeated_goal_failures_trigger_reflection_after_three_failures() -> None:
+    """Plan-failure driven reflection should appear through the real runtime tick path."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=1,
+            height=1,
+            tiles=[TileState(x=0, y=0, terrain=TerrainType.PATH, walkable=True)],
+            agents=[AgentState(agent_id="agent-1", name="Villager 1", x=0, y=0)],
+            day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        await runtime.step_once()
+        await runtime.step_once()
+        await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        assert debug_state["last_slow_loop_results"][0]["trigger_reasons"] == ["repeated_plan_failure"]
+        assert "reflect_on_failures" in runtime._world_state.agents[0].pending_planner_hints
+
+    asyncio.run(run_test())
+
+
 def test_runtime_agent_detail_services_return_typed_snapshots() -> None:
     """The runtime service should return rich typed agent snapshot DTOs, not raw dicts."""
 
@@ -169,6 +196,55 @@ def test_runtime_auxiliary_services_return_typed_endpoint_contracts() -> None:
         assert isinstance(inspect_agent, AgentInspectResponse)
         assert reflection.agent_id == "agent-1"
         assert inspect_agent.agent.agent_id == "agent-1"
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_and_recent_reflections_expose_workflow_audit_fields() -> None:
+    """Forced reflection should surface staged audit details through runtime responses."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        reflection = await runtime.force_reflect("agent-1")
+        recent = await runtime.get_recent_reflections()
+
+        assert isinstance(reflection, ForceReflectResponse)
+        assert isinstance(recent, ReflectionRunsResponse)
+        assert reflection.completed_stages[-2:] == ["persist_updates", "emit_planner_hints"]
+        assert reflection.failure_stage is None
+        assert reflection.validation_errors == []
+        assert recent.reflections[-1].agent_id == "agent-1"
+        assert recent.reflections[-1].completed_stages == reflection.completed_stages
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_surfaces_validation_failures_without_planner_hints() -> None:
+    """Validation failures should be reported through force-reflect audit fields."""
+
+    class InvalidReflectionWorkflow(ReflectionWorkflow):
+        def run(self, agent: AgentState, context: ReflectionContext) -> ReflectionResult:
+            return ReflectionResult(
+                goals=[""],
+                beliefs=["invalid"],
+                memory_entries=["invalid"],
+                planner_hints=["rest_soon"],
+            )
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+        runtime._slow_loop_service._reflection_workflow = InvalidReflectionWorkflow()
+
+        reflection = await runtime.force_reflect("agent-1")
+        recent = await runtime.get_recent_reflections()
+
+        assert reflection.applied is False
+        assert reflection.planner_hints == []
+        assert reflection.failure_stage == "validate"
+        assert reflection.validation_errors
+        assert recent.reflections[-1].failure_stage == "validate"
+        assert recent.reflections[-1].applied is False
 
     asyncio.run(run_test())
 

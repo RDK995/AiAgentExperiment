@@ -8,6 +8,7 @@ from app.cognition.belief_updater import BeliefUpdater
 from app.cognition.goal_updater import GoalUpdater
 from app.cognition.reflection import ReflectionWorkflow
 from app.cognition.reflection_graph import AutobiographyBuilder
+from app.cognition.triggers import ReflectionTriggerEvaluator
 from app.cognition.validation import ReflectionValidationError, ReflectionValidator
 from app.engine.event_bus import EventBus
 from app.engine.sim_clock import SimTick
@@ -27,6 +28,9 @@ class SlowLoopResult:
     trigger_reasons: list[str] = field(default_factory=list)
     applied: bool = False
     planner_hints: list[str] = field(default_factory=list)
+    failure_stage: str | None = None
+    validation_errors: list[str] = field(default_factory=list)
+    completed_stages: list[str] = field(default_factory=list)
 
 
 class SlowLoopService:
@@ -42,6 +46,7 @@ class SlowLoopService:
         belief_updater: BeliefUpdater,
         memory_writer: MemoryWriter,
         retrieval_service: RetrievalContextService | None = None,
+        trigger_evaluator: ReflectionTriggerEvaluator | None = None,
     ) -> None:
         self._memory_retriever = memory_retriever
         self._autobiography_builder = autobiography_builder
@@ -51,6 +56,7 @@ class SlowLoopService:
         self._belief_updater = belief_updater
         self._memory_writer = memory_writer
         self._retrieval_service = retrieval_service
+        self._trigger_evaluator = trigger_evaluator or ReflectionTriggerEvaluator()
         self.last_results: list[SlowLoopResult] = []
 
     def handle_post_fast_loop(
@@ -66,6 +72,7 @@ class SlowLoopService:
 
         for event in events:
             self._apply_event_trigger(world, event)
+        self._trigger_evaluator.apply_state_triggers(world)
 
         replayed_events: list[SimulationEvent] = list(events)
         for agent in world.agents:
@@ -80,28 +87,7 @@ class SlowLoopService:
         return replayed_events
 
     def _apply_event_trigger(self, world: WorldState, event: SimulationEvent) -> None:
-        if event.type is EventType.DAY_ROLLOVER:
-            next_day_index = event.payload.get("day_index")
-            for agent in world.agents:
-                if next_day_index is not None and agent.daily_summary_day_index != next_day_index:
-                    agent.daily_summary_day_index = next_day_index
-                    agent.daily_summary_candidates = []
-                agent.slow_loop_trigger_flags.add("day_rollover")
-            return
-
-        if event.agent_id is None:
-            return
-
-        agent = world.agent_by_id(event.agent_id)
-        if agent is None:
-            return
-
-        if event.type is EventType.PLAN_FAILED and agent.plan_failure_count >= 3:
-            agent.slow_loop_trigger_flags.add("repeated_plan_failure")
-        elif event.type is EventType.MAJOR_LIFE_EVENT:
-            agent.slow_loop_trigger_flags.add("major_life_event")
-        elif event.type is EventType.SOCIAL_MILESTONE:
-            agent.slow_loop_trigger_flags.add("social_milestone")
+        self._trigger_evaluator.apply_event_trigger(world, event)
 
     def _run_for_agent(
         self,
@@ -133,20 +119,61 @@ class SlowLoopService:
             goals=goals,
             relationships=relationships,
         )
-        raw_result = self._reflection_workflow.run(agent, context)
-        try:
-            validated_result = self._validator.validate(raw_result)
-        except ReflectionValidationError:
-            return SlowLoopResult(
-                agent_id=agent.agent_id,
-                trigger_reasons=trigger_reasons,
-                applied=False,
+        if hasattr(self._reflection_workflow, "execute"):
+            execution = self._reflection_workflow.execute(
+                agent,
+                world,
+                context,
+                validator=self._validator,
+                goal_updater=self._goal_updater,
+                belief_updater=self._belief_updater,
+                memory_writer=self._memory_writer,
             )
+            if not execution.success or execution.result is None:
+                return SlowLoopResult(
+                    agent_id=agent.agent_id,
+                    trigger_reasons=trigger_reasons,
+                    applied=False,
+                    failure_stage=execution.failure_stage,
+                    validation_errors=list(execution.validation_errors),
+                    completed_stages=list(execution.completed_stages),
+                )
+            validated_result = execution.result
+            completed_stages = list(execution.completed_stages)
+        else:
+            raw_result = self._reflection_workflow.run(agent, context)
+            try:
+                validated_result = self._validator.validate(raw_result)
+            except ReflectionValidationError as exc:
+                return SlowLoopResult(
+                    agent_id=agent.agent_id,
+                    trigger_reasons=trigger_reasons,
+                    applied=False,
+                    failure_stage="validate",
+                    validation_errors=[str(exc)],
+                    completed_stages=[
+                        "load_state",
+                        "retrieve_context",
+                        "build_prompt",
+                        "call_model",
+                        "parse_json",
+                    ],
+                )
 
-        self._goal_updater.apply(agent, validated_result.goals)
-        self._belief_updater.apply(agent, validated_result.beliefs)
-        self._memory_writer.write(agent, validated_result.memory_entries)
-        agent.pending_planner_hints = list(validated_result.planner_hints)
+            self._goal_updater.apply(agent, validated_result.goals)
+            self._belief_updater.apply(agent, validated_result.beliefs)
+            self._memory_writer.write(agent, validated_result.memory_entries)
+            agent.pending_planner_hints = list(validated_result.planner_hints)
+            completed_stages = [
+                "load_state",
+                "retrieve_context",
+                "build_prompt",
+                "call_model",
+                "parse_json",
+                "validate",
+                "persist_updates",
+                "emit_planner_hints",
+            ]
         agent.slow_loop_trigger_flags.clear()
         event_bus.emit(
             SimulationEvent(
@@ -166,6 +193,7 @@ class SlowLoopService:
             trigger_reasons=trigger_reasons,
             applied=True,
             planner_hints=list(validated_result.planner_hints),
+            completed_stages=completed_stages,
         )
 
     @staticmethod

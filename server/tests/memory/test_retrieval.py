@@ -657,6 +657,43 @@ def test_rerank_memories_can_favor_stronger_similarity_over_more_recent_lower_re
     assert (reranked[0].rerank_score or 0.0) > (reranked[1].rerank_score or 0.0)
 
 
+def test_rerank_memories_deduplicates_runtime_and_persistent_copies_of_same_text() -> None:
+    """A runtime copy and persisted copy of the same memory should share one context slot."""
+
+    runtime_copy = RetrievedMemoryRecord(
+        raw_text="agent-2 gave me berries.",
+        tick=None,
+        salience=0.35,
+        valence=0.2,
+    )
+    persistent_copy = RetrievedMemoryRecord(
+        id=str(uuid.uuid4()),
+        raw_text="agent-2 gave me berries.",
+        tick=14,
+        salience=0.9,
+        valence=0.3,
+        similarity_score=0.75,
+    )
+    distinct_memory = RetrievedMemoryRecord(
+        id=str(uuid.uuid4()),
+        raw_text="We repaired the fence.",
+        tick=13,
+        salience=0.4,
+        valence=0.1,
+    )
+
+    reranked = rerank_memories([runtime_copy, distinct_memory], [persistent_copy], final_limit=3)
+
+    assert [memory.raw_text for memory in reranked] == [
+        "agent-2 gave me berries.",
+        "We repaired the fence.",
+    ]
+    assert reranked[0].id == persistent_copy.id
+    assert reranked[0].tick == 14
+    assert reranked[0].similarity_score == 0.75
+    assert reranked[0].salience == 0.9
+
+
 def test_retrieve_context_respects_final_memory_cap_across_runtime_and_persistent_sources(db_session: Session) -> None:
     """Context assembly should cap merged memories even when runtime and persistent sources both contribute."""
 

@@ -337,20 +337,32 @@ def rerank_memories(
         for memory in similar_memories
     ]
     deduplicated: dict[str, tuple[set[str], RetrievedMemoryRecord]] = {}
+    identity_by_text: dict[str, str] = {}
     max_tick = max((memory.tick or 0) for _, memory in merged_sources) if merged_sources else 0
     min_tick = min((memory.tick or 0) for _, memory in merged_sources) if merged_sources else 0
 
     for source, memory in merged_sources:
-        identity = memory.id or f"text:{memory.raw_text}"
+        text_identity = f"text:{memory.raw_text}"
+        aliased_identity = identity_by_text.get(text_identity)
+        if aliased_identity is not None:
+            _, aliased_memory = deduplicated[aliased_identity]
+            if memory.id is None or aliased_memory.id is None:
+                identity = aliased_identity
+            else:
+                identity = memory.id or text_identity
+        else:
+            identity = memory.id or text_identity
         sources, existing = deduplicated.get(identity, (set(), None))
         sources.add(source)
         if existing is None:
             deduplicated[identity] = (sources, memory)
+            identity_by_text.setdefault(text_identity, identity)
             continue
         deduplicated[identity] = (
             sources,
             existing.model_copy(
                 update={
+                    "id": existing.id or memory.id,
                     "similarity_score": max(
                         existing.similarity_score or 0.0,
                         memory.similarity_score or 0.0,
@@ -361,6 +373,7 @@ def rerank_memories(
                 }
             ),
         )
+        identity_by_text.setdefault(text_identity, identity)
 
     scored: list[RetrievedMemoryRecord] = []
     tick_span = max(max_tick - min_tick, 1)

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.engine.scheduler import ScheduledTask
 from app.engine.tick_loop import SimulationRuntime
-from app.engine.world_state import WorldState, build_initial_world_state
+from app.engine.world_state import AgentState, ResourceNodeState, TerrainType, TileState, WorldState, build_initial_world_state
 from app.schemas.agent import AgentStateSnapshot
 from app.schemas.event import EventType, SimulationEvent
 from app.schemas.api import (
@@ -163,6 +163,114 @@ def test_runtime_auxiliary_services_return_typed_endpoint_contracts() -> None:
         assert isinstance(inspect_agent, AgentInspectResponse)
         assert reflection.agent_id == "agent-1"
         assert inspect_agent.agent.agent_id == "agent-1"
+
+    asyncio.run(run_test())
+
+
+def test_runtime_spawn_food_creates_authoritative_item_stack() -> None:
+    """Admin food spawning should populate authoritative world items for the engine modules."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        response = await runtime.spawn_food(tile_x=2, tile_y=2, quantity=3, item_type="berries")
+
+        assert response.item_type == "berries"
+        assert response.quantity == 3
+        assert len(runtime._world_state.items) == 1
+        assert runtime._world_state.items[0].item_type == "berries"
+        assert runtime._world_state.items[0].quantity == 3
+
+    asyncio.run(run_test())
+
+
+def test_runtime_resource_targeting_moves_agent_toward_water_and_finishes_resource_drink_plan() -> None:
+    """Perception, planning, and execution should form a targeted water-seeking loop."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=4,
+            height=3,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+            agents=[AgentState(agent_id="agent-1", name="A", x=0, y=1, thirst=80.0)],
+            resources=[ResourceNodeState(resource_type="water", x=2, y=1, quantity=1)],
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        first = await runtime.step_once()
+        second = await runtime.step_once()
+        third = await runtime.step_once()
+        fourth = await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+        recent_events = await runtime.get_recent_world_events(limit=20)
+
+        assert first.agents[0].position.x == 1
+        assert second.agents[0].position.x == 2
+        assert third.agents[0].needs.thirst < second.agents[0].needs.thirst
+        assert fourth.agents[0].needs.thirst < third.agents[0].needs.thirst
+        assert runtime._world_state.resources == []
+        assert debug_state["last_fast_loop_traces"][0]["selected_action"] == "drink"
+        assert any(event.event_type == "task_progress" for event in recent_events)
+        assert any(event.event_type == "task_completed" for event in recent_events)
+
+    asyncio.run(run_test())
+
+
+def test_runtime_debug_state_surfaces_perception_planning_execution_and_lifecycle_signals() -> None:
+    """The runtime debug surface should expose the wired engine-module flow for one tick."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=4,
+            height=3,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+            agents=[AgentState(agent_id="agent-1", name="A", x=1, y=1, thirst=70.0, health=0.0)],
+            resources=[ResourceNodeState(resource_type="water", x=2, y=1, quantity=1)],
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        trace = debug_state["last_fast_loop_traces"][0]
+        assert trace["perception_summary"]["nearby_water"] is True
+        assert trace["top_action_candidates"][0]["action"] == "drink"
+        assert trace["planned_tasks"] == ["move_to", "fetch_water", "drink"]
+        assert "action_executed" in trace["emitted_event_types"]
+        assert "action_executed" in debug_state["last_fast_loop_event_types"]
+        assert "death" in debug_state["last_lifecycle_event_types"]
+        assert "death" in debug_state["last_tick_telemetry"]["event_types"]
+
+    asyncio.run(run_test())
+
+
+def test_runtime_recent_world_events_expose_shared_transport_shape_for_engine_events() -> None:
+    """Recent runtime events should be adapted into stable world-event DTOs with actor ids and payloads."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=4,
+            height=3,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+            agents=[AgentState(agent_id="agent-1", name="A", x=0, y=1, thirst=80.0)],
+            resources=[ResourceNodeState(resource_type="water", x=2, y=1, quantity=1)],
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        await runtime.step_once()
+        recent_events = await runtime.get_recent_world_events(limit=10)
+
+        assert recent_events
+        assert all(event.event_id for event in recent_events)
+        assert all(event.tick >= 1 for event in recent_events)
+        assert any(event.event_type == "task_progress" for event in recent_events)
+        assert any(event.event_type == "action_executed" for event in recent_events)
+
+        action_event = next(event for event in recent_events if event.event_type == "action_executed")
+        assert action_event.actor_ids == ["agent-1"]
+        assert action_event.target_ids == []
+        assert "action" in action_event.payload
+        assert "position" in action_event.payload
 
     asyncio.run(run_test())
 

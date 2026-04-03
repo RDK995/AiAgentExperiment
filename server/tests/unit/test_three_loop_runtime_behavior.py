@@ -21,7 +21,7 @@ from app.engine.scheduler import ScheduledTask, TaskScheduler
 from app.engine.sim_clock import SimTick, SimulationClock
 from app.engine.tick_loop import SimulationRuntime
 from app.engine.world_loop import WorldLoop
-from app.engine.world_state import AgentState, TerrainType, TileState, WorldState
+from app.engine.world_state import AgentState, ItemStackState, ResourceNodeState, TerrainType, TileState, WorldState
 from app.memory.retriever import MemoryRetriever
 from app.memory.writer import MemoryWriter
 from app.schemas.api import SimulationSnapshot
@@ -288,6 +288,30 @@ def test_planner_hints_are_consumed_after_guiding_action(simple_world: WorldStat
     assert trace.planner_hints_after == []
 
 
+def test_fast_loop_trace_records_perception_candidates_plans_and_events(simple_world: WorldState) -> None:
+    """Fast-loop traces should expose the full perception-to-execution chain."""
+
+    simple_world.agents[0].thirst = 80.0
+    simple_world.resources.append(ResourceNodeState(resource_type="water", x=2, y=1, quantity=1))
+    runtime, _, _, _ = _build_runtime_components(simple_world)
+    tick = SimTick(
+        tick=1,
+        at=datetime(2000, 1, 1, 6, 1, tzinfo=timezone.utc),
+        previous_day_index=1,
+        day_index=1,
+    )
+
+    runtime.step_all(simple_world, tick, EventBus())
+
+    trace = runtime.last_step_traces[0]
+    assert trace.perception_summary["nearby_water"] is True
+    assert trace.perception_summary["nearest_water"] == {"x": 2, "y": 1}
+    assert trace.top_action_candidates[0]["action"] == "drink"
+    assert trace.planned_tasks == ["move_to", "fetch_water", "drink"]
+    assert "task_completed" in trace.emitted_event_types
+    assert "action_executed" in trace.emitted_event_types
+
+
 def test_runtime_external_event_path_and_debug_state(simple_world: WorldState) -> None:
     """Runtime should accept external events and expose loop/debug state."""
 
@@ -317,6 +341,56 @@ def test_runtime_external_event_path_and_debug_state(simple_world: WorldState) -
         assert debug_state["last_tick_telemetry"]["event_types"]
 
     asyncio.run(run_test())
+
+
+def test_runtime_debug_state_surfaces_fast_loop_and_lifecycle_event_integration() -> None:
+    """Debug state should expose fast-loop traces plus lifecycle event summaries from the same tick."""
+
+    import asyncio
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=3,
+            height=3,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(3)],
+            agents=[AgentState(agent_id="agent-1", name="Villager 1", x=1, y=1, health=0.0)],
+            items=[ItemStackState(item_type="berries", x=1, y=1, quantity=1)],
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        trace = debug_state["last_fast_loop_traces"][0]
+        assert trace["perception_summary"]["nearby_food"] is True
+        assert trace["top_action_candidates"][0]["action"] in {"eat", "drink", "wander", "gather_food"}
+        assert "action_executed" in debug_state["last_fast_loop_event_types"]
+        assert "death" in debug_state["last_lifecycle_event_types"]
+        assert "death" in debug_state["last_tick_telemetry"]["event_types"]
+
+    asyncio.run(run_test())
+
+
+def test_fast_loop_threat_context_drives_flee_execution(simple_world: WorldState) -> None:
+    """A nearby threat in the authoritative world should drive flee through the fast loop."""
+
+    simple_world.agents[0].safety = 10.0
+    simple_world.agents.append(AgentState(agent_id="threat-1", name="Wolf", x=1, y=1, is_threat=True))
+    runtime, _, _, _ = _build_runtime_components(simple_world)
+    tick = SimTick(
+        tick=1,
+        at=datetime(2000, 1, 1, 6, 1, tzinfo=timezone.utc),
+        previous_day_index=1,
+        day_index=1,
+    )
+
+    events = runtime.step_all(simple_world, tick, EventBus())
+
+    trace = runtime.last_step_traces[0]
+    assert trace.perception_summary["nearby_threat"] is True
+    assert trace.top_action_candidates[0]["action"] == "flee"
+    assert trace.planned_tasks == ["flee_step"]
+    assert any(event.type is EventType.ACTION_EXECUTED for event in events)
 
 
 def _build_runtime_components(

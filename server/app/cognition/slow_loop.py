@@ -78,7 +78,11 @@ class SlowLoopService:
 
     def _apply_event_trigger(self, world: WorldState, event: SimulationEvent) -> None:
         if event.type is EventType.DAY_ROLLOVER:
+            next_day_index = event.payload.get("day_index")
             for agent in world.agents:
+                if next_day_index is not None and agent.daily_summary_day_index != next_day_index:
+                    agent.daily_summary_day_index = next_day_index
+                    agent.daily_summary_candidates = []
                 agent.slow_loop_trigger_flags.add("day_rollover")
             return
 

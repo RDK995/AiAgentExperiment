@@ -193,6 +193,7 @@ def test_day_rollover_prioritizes_daily_summary_candidates_over_recent_memory_no
     """Day-rollover reflection should see queued high-salience candidates before raw recency noise."""
 
     agent = simple_world.agents[0]
+    agent.daily_summary_day_index = slow_loop_tick.day_index
     agent.daily_summary_candidates = [
         MemoryCandidate(text="Child born in my household.", salience=0.95, valence=0.8),
         MemoryCandidate(text="agent-2 gave me berries.", salience=0.90, valence=0.7),
@@ -240,6 +241,43 @@ def test_day_rollover_prioritizes_daily_summary_candidates_over_recent_memory_no
         )
     ]
     assert slow_loop.last_results[0].trigger_reasons == ["day_rollover"]
+
+
+def test_day_rollover_expires_stale_daily_summary_candidates_from_quiet_days(
+    simple_world: WorldState,
+    slow_loop_tick: SimTick,
+) -> None:
+    """A quiet-day rollover should clear stale queued candidates before reflection context is built."""
+
+    agent = simple_world.agents[0]
+    agent.daily_summary_day_index = slow_loop_tick.day_index - 2
+    agent.daily_summary_candidates = [
+        MemoryCandidate(text="A child was born.", salience=0.95, valence=0.9),
+    ]
+    agent.memories = ["Cooked dinner.", "Walked the path."]
+
+    builder = SpyAutobiographyBuilder(output="Quiet-day autobiography slice")
+    slow_loop, _, _, workflow, _, _, _ = _build_service(
+        memory_retriever=MemoryRetriever(),
+        autobiography_builder=builder,
+    )
+    event_bus = _event_bus_for(
+        SimulationEvent(
+            type=EventType.DAY_ROLLOVER,
+            tick=slow_loop_tick.tick,
+            sim_time=slow_loop_tick.at,
+            payload={"day_index": slow_loop_tick.day_index},
+        )
+    )
+
+    slow_loop.handle_post_fast_loop(simple_world, slow_loop_tick, event_bus)
+
+    assert agent.daily_summary_day_index == slow_loop_tick.day_index
+    assert agent.daily_summary_candidates == []
+    assert workflow.calls[0].recent_events == ["Walked the path.", "Cooked dinner."]
+    assert builder.calls == [
+        (agent.agent_id, ["Walked the path.", "Cooked dinner."])
+    ]
 
 
 def test_reflection_output_is_validated_before_application(

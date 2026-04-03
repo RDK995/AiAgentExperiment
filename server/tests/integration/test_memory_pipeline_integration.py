@@ -231,8 +231,8 @@ def test_runtime_exposes_daily_summary_candidates_per_agent() -> None:
     asyncio.run(run_test())
 
 
-def test_runtime_day_rollover_slow_loop_uses_daily_summary_candidates_first() -> None:
-    """Real day rollover should pass queued summary candidates into slow-loop context before recency noise."""
+def test_runtime_day_rollover_expires_previous_day_summary_candidates() -> None:
+    """Real day rollover should drop stale previous-day summary candidates before slow-loop reflection."""
 
     async def run_test() -> None:
         world = build_initial_world_state(width=4, height=3, initial_agent_count=2)
@@ -261,13 +261,16 @@ def test_runtime_day_rollover_slow_loop_uses_daily_summary_candidates_first() ->
         await runtime.step_once()
 
         receiver_context = next(context for context in workflow.calls if context.agent_id == "agent-2")
+        receiver = runtime._world_state.agent_by_id("agent-2")
         assert receiver_context.trigger_reasons == ["day_rollover"]
-        assert receiver_context.recent_events[0] == "agent-1 gave me berries."
-        assert receiver_context.recent_events[1:4] == [
+        assert receiver_context.recent_events[:3] == [
             "Ate a meal.",
             "Slept well.",
             "Walked the path.",
         ]
-        assert receiver_context.recent_events.count("agent-1 gave me berries.") == 1
+        assert receiver is not None
+        assert receiver.daily_summary_day_index == runtime._world_state.day_index
+        assert receiver.daily_summary_candidates == []
+        assert receiver_context.recent_events[-1] == "agent-1 gave me berries."
 
     asyncio.run(run_test())

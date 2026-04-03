@@ -33,7 +33,7 @@ class LifecycleService:
                         EventType.MAJOR_LIFE_EVENT,
                         tick,
                         now,
-                        agent.agent_id,
+                        agent,
                         {"kind": "stage_progression", "stage_of_life": agent.stage_of_life.value},
                     )
                 )
@@ -54,8 +54,20 @@ class LifecycleService:
                             EventType.BIRTH,
                             tick,
                             now,
-                            agent.agent_id,
+                            agent,
                             {"child_id": child.agent_id},
+                            target_ids=[child.agent_id],
+                        )
+                    )
+                    events.append(
+                        self._emit(
+                            event_bus,
+                            EventType.CHILD_BORN,
+                            tick,
+                            now,
+                            agent,
+                            {"child_id": child.agent_id},
+                            target_ids=[child.agent_id],
                         )
                     )
 
@@ -68,7 +80,17 @@ class LifecycleService:
                         EventType.DEATH,
                         tick,
                         now,
-                        agent.agent_id,
+                        agent,
+                        {"kind": "health_failure"},
+                    )
+                )
+                events.append(
+                    self._emit(
+                        event_bus,
+                        EventType.AGENT_DIED,
+                        tick,
+                        now,
+                        agent,
                         {"kind": "health_failure"},
                     )
                 )
@@ -86,13 +108,32 @@ class LifecycleService:
             and agent.pregnancy_progress_ticks is None
         )
 
-    def start_pregnancy(self, agent: AgentState, partner_id: str | None = None) -> None:
+    def start_pregnancy(
+        self,
+        agent: AgentState,
+        partner_id: str | None = None,
+        *,
+        tick: int | None = None,
+        now: datetime | None = None,
+        event_bus: EventBus | None = None,
+    ) -> SimulationEvent | None:
         """Begin a prototype pregnancy for a fertile agent."""
 
         if not self.is_fertile(agent):
             raise ValueError("Agent is not fertile.")
         agent.pregnancy_progress_ticks = 0
         agent.pregnancy_partner_id = partner_id
+        if event_bus is not None and tick is not None and now is not None:
+            return self._emit(
+                event_bus,
+                EventType.PREGNANCY_STARTED,
+                tick,
+                now,
+                agent,
+                {"partner_id": partner_id} if partner_id is not None else {},
+                target_ids=[partner_id] if partner_id is not None else [],
+            )
+        return None
 
     @staticmethod
     def _stage_for_age(age_ticks: int) -> StageOfLife:
@@ -130,8 +171,10 @@ class LifecycleService:
         event_type: EventType,
         tick: int,
         now: datetime,
-        agent_id: str,
+        agent: AgentState,
         payload: dict[str, object],
+        *,
+        target_ids: list[str] | None = None,
     ) -> SimulationEvent:
         """Create and enqueue a lifecycle event."""
 
@@ -139,7 +182,12 @@ class LifecycleService:
             type=event_type,
             tick=tick,
             sim_time=now,
-            agent_id=agent_id,
+            agent_id=agent.agent_id,
+            actor_ids=[agent.agent_id],
+            target_ids=list(target_ids or []),
+            location_x=agent.x,
+            location_y=agent.y,
+            source_module="lifecycle",
             payload=payload,
         )
         event_bus.emit(event)

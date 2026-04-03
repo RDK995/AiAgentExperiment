@@ -238,6 +238,7 @@ class DebugMetricsResponse(BaseModel):
     pending_scheduler_tasks: list[str]
     last_tick_event_count: int = Field(ge=0)
     last_tick_event_types: list[str]
+    last_tick_event_type_counts: dict[str, int]
 
 
 class ReplayEventResponse(BaseModel):

@@ -175,25 +175,62 @@ class ActionExecutor:
 
         if task.task_type is TaskType.DRINK:
             agent.thirst = max(0.0, agent.thirst - 10.0)
-            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.AGENT_DRANK,
+                domain_payload={"action": "drink"},
+            )
         if task.task_type is TaskType.EAT:
             agent.hunger = max(0.0, agent.hunger - 8.0)
-            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.AGENT_ATE,
+                domain_payload={"action": "eat"},
+            )
         if task.task_type is TaskType.REST:
             agent.fatigue = max(0.0, agent.fatigue - 6.0)
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
         if task.task_type is TaskType.GATHER_FOOD:
-            if not self._consume_food_source(world, agent):
+            food_source_empty = {"value": False}
+            if not self._consume_food_source(world, agent, tick, now, event_bus, events, food_source_empty):
                 return self._fail_task(event_bus, tick, now, agent, task, events)
             agent.hunger = max(0.0, agent.hunger - 4.0)
             agent.memories.append("Gathered food nearby.")
-            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.AGENT_ATE,
+                domain_payload={"action": "gather_food", "food_source_empty": food_source_empty["value"]},
+            )
         if task.task_type is TaskType.FETCH_WATER:
             if not self._consume_water_source(world, agent):
                 return self._fail_task(event_bus, tick, now, agent, task, events)
             agent.thirst = max(0.0, agent.thirst - 4.0)
             agent.memories.append("Fetched fresh water.")
-            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.AGENT_DRANK,
+                domain_payload={"action": "fetch_water"},
+            )
         if task.task_type is TaskType.COOK:
             agent.hunger = max(0.0, agent.hunger - 5.0)
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
@@ -289,6 +326,8 @@ class ActionExecutor:
         agent: AgentState,
         task: PlannedTask,
         events: list[SimulationEvent],
+        domain_event_type: EventType | None = None,
+        domain_payload: dict[str, object] | None = None,
     ) -> bool:
         """Emit a completion event for a non-movement task."""
 
@@ -303,6 +342,17 @@ class ActionExecutor:
                 {"task": task.task_type.value},
             )
         )
+        if domain_event_type is not None:
+            events.append(
+                self._emit_event(
+                    event_bus,
+                    domain_event_type,
+                    tick,
+                    now,
+                    agent,
+                    domain_payload or {},
+                )
+            )
         return True
 
     def _fail_task(
@@ -324,7 +374,16 @@ class ActionExecutor:
         events.append(self._emit_event(event_bus, EventType.PLAN_FAILED, tick, now, agent, payload))
         return False
 
-    def _consume_food_source(self, world: WorldState, agent: AgentState) -> bool:
+    def _consume_food_source(
+        self,
+        world: WorldState,
+        agent: AgentState,
+        tick: int,
+        now: datetime,
+        event_bus: EventBus,
+        events: list[SimulationEvent],
+        food_source_empty: dict[str, bool],
+    ) -> bool:
         """Consume one unit of food from the authoritative world at the agent location."""
 
         for index, item in enumerate(world.items):
@@ -332,6 +391,19 @@ class ActionExecutor:
                 item.quantity -= 1
                 if item.quantity <= 0:
                     world.items.pop(index)
+                    food_source_empty["value"] = True
+                    events.append(
+                        self._emit_event(
+                            event_bus,
+                            EventType.FOOD_STORE_EMPTY,
+                            tick,
+                            now,
+                            agent,
+                            {"item_type": item.item_type},
+                            location_x=item.x,
+                            location_y=item.y,
+                        )
+                    )
                 return True
 
         for resource in world.resources:
@@ -339,6 +411,20 @@ class ActionExecutor:
                 if resource.quantity <= 0:
                     return False
                 resource.quantity = max(0, resource.quantity - 1)
+                if resource.quantity == 0:
+                    food_source_empty["value"] = True
+                    events.append(
+                        self._emit_event(
+                            event_bus,
+                            EventType.FOOD_STORE_EMPTY,
+                            tick,
+                            now,
+                            agent,
+                            {"resource_type": resource.resource_type},
+                            location_x=resource.x,
+                            location_y=resource.y,
+                        )
+                    )
                 return True
 
         return False
@@ -388,6 +474,12 @@ class ActionExecutor:
         now: datetime,
         agent: AgentState,
         payload: dict[str, object],
+        *,
+        actor_ids: list[str] | None = None,
+        target_ids: list[str] | None = None,
+        location_x: int | None = None,
+        location_y: int | None = None,
+        source_module: str = "executor",
     ) -> SimulationEvent:
         """Create, enqueue, and return a simulation event."""
 
@@ -396,6 +488,11 @@ class ActionExecutor:
             tick=tick,
             sim_time=now,
             agent_id=agent.agent_id,
+            actor_ids=list(actor_ids or [agent.agent_id]),
+            target_ids=list(target_ids or []),
+            location_x=agent.x if location_x is None else location_x,
+            location_y=agent.y if location_y is None else location_y,
+            source_module=source_module,
             payload=payload,
         )
         event_bus.emit(event)

@@ -103,6 +103,8 @@ def test_executor_consumes_food_items_from_authoritative_world() -> None:
     assert world.items == []
     assert "Gathered food nearby." in agent.memories
     assert any(event.type is EventType.TASK_COMPLETED for event in events)
+    assert any(event.type is EventType.AGENT_ATE for event in events)
+    assert any(event.type is EventType.FOOD_STORE_EMPTY for event in events)
 
 
 def test_executor_fails_when_food_resource_node_is_already_depleted() -> None:
@@ -258,6 +260,57 @@ def test_executor_success_resets_stale_plan_failure_count() -> None:
 
     assert agent.plan_failure_count == 0
     assert any(event.type is EventType.TASK_COMPLETED for event in events)
+
+
+def test_executor_emits_agent_drank_for_direct_drink_task() -> None:
+    """Drink execution should emit the richer domain event alongside task completion."""
+
+    world = _make_world()
+    agent = world.agents[0]
+    agent.thirst = 20.0
+
+    events = ActionExecutor().execute(
+        world,
+        agent,
+        SelectedAction(action_type=ActionType.DRINK, tasks=[PlannedTask(TaskType.DRINK)]),
+        tick=1,
+        now=datetime(2000, 1, 1, 8, 0, tzinfo=timezone.utc),
+        event_bus=EventBus(),
+    )
+
+    assert agent.thirst == 10.0
+    assert any(event.type is EventType.AGENT_DRANK for event in events)
+    assert any(
+        event.type is EventType.AGENT_DRANK and event.payload == {"action": "drink"}
+        for event in events
+    )
+
+
+def test_executor_emits_food_store_empty_for_depleted_resource_node() -> None:
+    """Gathering the last unit from a food resource should emit a depletion event."""
+
+    world = _make_world()
+    agent = world.agents[0]
+    world.resources = [ResourceNodeState(resource_type="berries", x=1, y=1, quantity=1)]
+    agent.x = 1
+    agent.y = 1
+
+    events = ActionExecutor().execute(
+        world,
+        agent,
+        SelectedAction(action_type=ActionType.GATHER_FOOD, tasks=[PlannedTask(TaskType.GATHER_FOOD)]),
+        tick=1,
+        now=datetime(2000, 1, 1, 8, 0, tzinfo=timezone.utc),
+        event_bus=EventBus(),
+    )
+
+    assert world.resources[0].quantity == 0
+    assert any(event.type is EventType.AGENT_ATE for event in events)
+    assert any(event.type is EventType.FOOD_STORE_EMPTY for event in events)
+    assert any(
+        event.type is EventType.FOOD_STORE_EMPTY and event.payload == {"resource_type": "berries"}
+        for event in events
+    )
 
 
 def _make_world() -> WorldState:

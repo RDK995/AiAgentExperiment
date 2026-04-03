@@ -55,6 +55,7 @@ class WorldLoop:
                     type=EventType.DAY_ROLLOVER,
                     tick=tick.tick,
                     sim_time=tick.at,
+                    source_module="world_loop",
                     payload={"day_index": tick.day_index},
                 )
             )

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import timedelta
+import uuid
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event as sqlalchemy_event, select
+from sqlalchemy.orm import Session, sessionmaker
 
+from app.db.base import Base, import_models
+from app.db.models import WorldEvent
 from app.engine.scheduler import ScheduledTask
 from app.engine.tick_loop import SimulationRuntime
 from app.engine.world_state import AgentState, ResourceNodeState, TerrainType, TileState, WorldState, build_initial_world_state
@@ -271,6 +277,131 @@ def test_runtime_recent_world_events_expose_shared_transport_shape_for_engine_ev
         assert action_event.target_ids == []
         assert "action" in action_event.payload
         assert "position" in action_event.payload
+
+    asyncio.run(run_test())
+
+
+def test_runtime_event_bus_applies_relationship_listener_and_replay_projection() -> None:
+    """Runtime-emitted social events should update authoritative state and reach replay/world-event surfaces."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        await runtime.emit_simulation_event(
+            EventType.PROPOSAL_ACCEPTED,
+            agent_id="agent-1",
+            actor_ids=["agent-1"],
+            target_ids=["agent-2"],
+            payload={"ring": "woven_grass"},
+            source_module="integration-test",
+        )
+
+        assert runtime._world_state.agents[0].partner_id == "agent-2"
+        assert runtime._world_state.agents[1].partner_id == "agent-1"
+
+        await runtime.step_once()
+        replay = await runtime.get_replay_events(limit=10)
+        recent_events = await runtime.get_recent_world_events(limit=10)
+
+        proposal_event = next(event for event in recent_events if event.event_type == "proposal_accepted")
+        replay_event = next(event for event in replay.events if event.event_type == "proposal_accepted")
+
+        assert proposal_event.actor_ids == ["agent-1"]
+        assert proposal_event.target_ids == ["agent-2"]
+        assert proposal_event.source_module == "integration-test"
+        assert proposal_event.payload == {"ring": "woven_grass"}
+        assert replay_event.agent_id == "agent-1"
+        assert replay_event.payload == {"ring": "woven_grass"}
+
+    asyncio.run(run_test())
+
+
+def test_runtime_event_bus_projects_memories_and_telemetry_aggregates() -> None:
+    """Important runtime events should update memories immediately and roll into telemetry aggregates."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        await runtime.emit_simulation_event(
+            EventType.GIFT_GIVEN,
+            agent_id="agent-1",
+            actor_ids=["agent-1"],
+            target_ids=["agent-2"],
+            payload={"item_type": "berries"},
+            source_module="integration-test",
+        )
+
+        assert "A gift changed hands." in runtime._world_state.agents[0].memories
+        assert "A gift changed hands." in runtime._world_state.agents[1].memories
+
+        await runtime.step_once()
+        metrics = await runtime.get_debug_metrics()
+
+        assert metrics.last_tick_event_type_counts["gift_given"] == 1
+        assert "gift_given" in metrics.last_tick_event_types
+
+    asyncio.run(run_test())
+
+
+def test_runtime_optional_world_event_persistence_listener_writes_to_repository() -> None:
+    """Runtime should support an optional persistence listener without changing core loop ownership."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        actor_uuid = uuid.uuid4()
+        target_uuid = uuid.uuid4()
+        runtime = SimulationRuntime(
+            initial_state=build_initial_world_state(width=8, height=6, initial_agent_count=2),
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver=lambda agent_id: {
+                "agent-1": actor_uuid,
+                "agent-2": target_uuid,
+            }.get(agent_id),
+        )
+
+        await runtime.emit_simulation_event(
+            EventType.PROPOSAL_ACCEPTED,
+            agent_id="agent-1",
+            actor_ids=["agent-1"],
+            target_ids=["agent-2"],
+            payload={"ring": "woven_grass"},
+            source_module="integration-test",
+        )
+
+        with session_scope() as session:
+            persisted = session.scalars(select(WorldEvent)).all()
+
+        assert len(persisted) == 1
+        assert persisted[0].event_type == "proposal_accepted"
+        assert persisted[0].actor_ids == [actor_uuid]
+        assert persisted[0].target_ids == [target_uuid]
+        assert persisted[0].payload == {"ring": "woven_grass"}
+
+        engine.dispose()
 
     asyncio.run(run_test())
 

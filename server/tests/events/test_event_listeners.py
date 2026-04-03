@@ -183,6 +183,61 @@ def test_replay_event_log_projects_events_into_world_event_transport_shape() -> 
     assert projected[0].payload == {"ring": "woven_grass"}
 
 
+def test_replay_event_log_bounds_seen_ids_with_trimmed_history() -> None:
+    """Replay dedupe ids should stay aligned with the bounded replay window."""
+
+    replay_log = ReplayEventLog(max_events=2)
+
+    replay_log.record(
+        SimulationEvent(
+            event_id="evt-1",
+            type=EventType.AGENT_ATE,
+            tick=1,
+            sim_time=datetime(2000, 1, 1, 8, 1, tzinfo=timezone.utc),
+            actor_ids=["agent-1"],
+            payload={},
+        )
+    )
+    replay_log.record(
+        SimulationEvent(
+            event_id="evt-2",
+            type=EventType.AGENT_DRANK,
+            tick=2,
+            sim_time=datetime(2000, 1, 1, 8, 2, tzinfo=timezone.utc),
+            actor_ids=["agent-1"],
+            payload={},
+        )
+    )
+    replay_log.record(
+        SimulationEvent(
+            event_id="evt-3",
+            type=EventType.GIFT_GIVEN,
+            tick=3,
+            sim_time=datetime(2000, 1, 1, 8, 3, tzinfo=timezone.utc),
+            actor_ids=["agent-1"],
+            target_ids=["agent-2"],
+            payload={},
+        )
+    )
+
+    assert [event.event_id for event in replay_log.recent_events(limit=10)] == ["evt-2", "evt-3"]
+    assert replay_log._seen_event_ids == {"evt-2", "evt-3"}
+
+    replay_log.record(
+        SimulationEvent(
+            event_id="evt-1",
+            type=EventType.AGENT_ATE,
+            tick=4,
+            sim_time=datetime(2000, 1, 1, 8, 4, tzinfo=timezone.utc),
+            actor_ids=["agent-1"],
+            payload={"replayed": True},
+        )
+    )
+
+    assert [event.event_id for event in replay_log.recent_events(limit=10)] == ["evt-3", "evt-1"]
+    assert replay_log._seen_event_ids == {"evt-3", "evt-1"}
+
+
 def test_telemetry_recorder_can_observe_events_as_a_bus_listener() -> None:
     """Telemetry should be able to observe emitted events without replacing the drain-based flow."""
 

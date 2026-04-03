@@ -121,8 +121,11 @@ class ReplayEventLog:
             return
         self._events.append(event)
         self._events = self._events[-self._max_events :]
-        if event.event_id is not None:
-            self._seen_event_ids.add(event.event_id)
+        self._seen_event_ids = {
+            replayed_event.event_id
+            for replayed_event in self._events
+            if replayed_event.event_id is not None
+        }
 
     def recent_events(self, limit: int = 200) -> list[SimulationEvent]:
         """Return a bounded copy of the replayable event log."""

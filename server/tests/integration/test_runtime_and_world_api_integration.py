@@ -343,6 +343,118 @@ def test_runtime_event_bus_projects_memories_and_telemetry_aggregates() -> None:
     asyncio.run(run_test())
 
 
+def test_runtime_event_bus_fans_out_consumption_events_across_memory_replay_and_telemetry() -> None:
+    """Consumption events should update memories immediately and remain visible in replay and telemetry."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        await runtime.emit_simulation_event(
+            EventType.AGENT_ATE,
+            agent_id="agent-1",
+            actor_ids=["agent-1"],
+            payload={"action": "eat"},
+            source_module="integration-test",
+        )
+        await runtime.emit_simulation_event(
+            EventType.AGENT_DRANK,
+            agent_id="agent-2",
+            actor_ids=["agent-2"],
+            payload={"action": "drink"},
+            source_module="integration-test",
+        )
+
+        assert "Ate a meal." in runtime._world_state.agents[0].memories
+        assert "Drank fresh water." in runtime._world_state.agents[1].memories
+
+        await runtime.step_once()
+        replay = await runtime.get_replay_events(limit=20)
+        metrics = await runtime.get_debug_metrics()
+        recent_events = await runtime.get_recent_world_events(limit=20)
+
+        assert {"agent_ate", "agent_drank"} <= {event.event_type for event in replay.events}
+        assert metrics.last_tick_event_type_counts["agent_ate"] == 1
+        assert metrics.last_tick_event_type_counts["agent_drank"] == 1
+        assert {"agent_ate", "agent_drank"} <= {event.event_type for event in recent_events}
+
+    asyncio.run(run_test())
+
+
+def test_runtime_event_bus_fans_out_lifecycle_domain_events_with_optional_persistence() -> None:
+    """Lifecycle-style events should reach memory, telemetry, replay, and persistence listeners together."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        actor_uuid = uuid.uuid4()
+        child_uuid = uuid.uuid4()
+        runtime = SimulationRuntime(
+            initial_state=build_initial_world_state(width=8, height=6, initial_agent_count=2),
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver=lambda agent_id: {
+                "agent-1": actor_uuid,
+                "agent-2": child_uuid,
+            }.get(agent_id),
+        )
+
+        await runtime.emit_simulation_event(
+            EventType.CHILD_BORN,
+            agent_id="agent-1",
+            actor_ids=["agent-1"],
+            target_ids=["agent-2"],
+            payload={"child_id": "agent-2"},
+            source_module="integration-test",
+        )
+        await runtime.emit_simulation_event(
+            EventType.AGENT_DIED,
+            agent_id="agent-1",
+            actor_ids=["agent-1"],
+            payload={"kind": "health_failure"},
+            source_module="integration-test",
+        )
+
+        assert "A child was born." in runtime._world_state.agents[0].memories
+        assert "Death changed the village." in runtime._world_state.agents[0].memories
+
+        await runtime.step_once()
+        replay = await runtime.get_replay_events(limit=20)
+        metrics = await runtime.get_debug_metrics()
+
+        with session_scope() as session:
+            persisted = session.scalars(select(WorldEvent).order_by(WorldEvent.tick, WorldEvent.id)).all()
+
+        assert {"child_born", "agent_died"} <= {event.event_type for event in replay.events}
+        assert metrics.last_tick_event_type_counts["child_born"] == 1
+        assert metrics.last_tick_event_type_counts["agent_died"] == 1
+        assert {"child_born", "agent_died"} <= {event.event_type for event in persisted}
+        engine.dispose()
+
+    asyncio.run(run_test())
+
+
 def test_runtime_optional_world_event_persistence_listener_writes_to_repository() -> None:
     """Runtime should support an optional persistence listener without changing core loop ownership."""
 

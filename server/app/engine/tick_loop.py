@@ -10,6 +10,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.agents.dialogue import DialoguePreparationService
 from app.agents.executor import ActionExecutor
 from app.agents.lifecycle import LifecycleService
 from app.agents.needs import NeedService
@@ -37,6 +38,7 @@ from app.engine.world_state import AgentState, ItemStackState, WorldState, build
 from app.memory.embeddings import EmbeddingProvider
 from app.memory.retriever import MemoryRetriever
 from app.memory.pipeline import MemoryPipelineListener
+from app.memory.retrieval import RetrievalContextService
 from app.memory.writer import MemoryWriter
 from app.schemas.api import (
     AdvanceDaysResponse,
@@ -95,6 +97,15 @@ class SimulationRuntime:
         self._recent_events: list[SimulationEvent] = []
         self._memory_retriever = MemoryRetriever()
         self._memory_embedding_provider = memory_embedding_provider
+        autobiography_builder = AutobiographyBuilder()
+        self._retrieval_service = RetrievalContextService(
+            memory_retriever=self._memory_retriever,
+            autobiography_builder=autobiography_builder,
+            session_scope=self._world_event_session_scope,
+            persistent_agent_id_resolver=self._persistent_agent_id_resolver,
+            embedding_provider=self._memory_embedding_provider,
+        )
+        self._dialogue_service = DialoguePreparationService(self._retrieval_service)
         self._event_bus = self._build_event_bus()
         self._sim_clock = SimulationClock(
             start_time=initial_state.current_time,
@@ -102,12 +113,13 @@ class SimulationRuntime:
         )
         self._slow_loop_service = SlowLoopService(
             memory_retriever=self._memory_retriever,
-            autobiography_builder=AutobiographyBuilder(),
+            autobiography_builder=autobiography_builder,
             reflection_workflow=ReflectionWorkflow(),
             validator=ReflectionValidator(),
             goal_updater=GoalUpdater(),
             belief_updater=BeliefUpdater(),
             memory_writer=MemoryWriter(),
+            retrieval_service=self._retrieval_service,
         )
         self._agent_runtime = AgentRuntime(
             perception_service=PerceptionService(),
@@ -386,6 +398,13 @@ class SimulationRuntime:
                 summary=" | ".join(recent) if recent else "No memories available.",
                 memory_count=len(agent.memories),
             )
+
+    async def prepare_dialogue_context(self, agent_id: str, topic_text: str):
+        """Return compact dialogue context from the shared retrieval pipeline."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            return self._dialogue_service.prepare(agent, topic_text=topic_text)
 
     async def get_debug_metrics(self) -> DebugMetricsResponse:
         """Return compact runtime metrics for debugging."""

@@ -18,6 +18,8 @@ class ReflectionContext(BaseModel):
     trigger_reasons: list[str] = Field(default_factory=list)
     autobiography: str
     recent_events: list[str] = Field(default_factory=list)
+    goals: list[str] = Field(default_factory=list)
+    relationships: list[str] = Field(default_factory=list)
 
 
 class ReflectionResult(BaseModel):

@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.cognition.reflection import ReflectionWorkflow
+from app.cognition.prompt_builder import ReflectionPromptBuilder
 from app.db.enums import GoalType, StageOfLife
 from app.cognition.output_parser import ReflectionOutputParser
 from app.engine.world_state import AgentState
@@ -793,8 +794,56 @@ def test_reflection_workflow_routes_structured_output_through_parser() -> None:
     assert result == ReflectionResult(
         goals=["Support village stability for Villager 1"],
         beliefs=["agent:agent-1:can_improve_outcomes_by_adapting_routines:yes"],
-        memory_entries=["A difficult day with a strong ending."],
+        memory_entries=["storm"],
         planner_hints=["keep_routine"],
+    )
+
+
+def test_reflection_workflow_uses_retrieved_goal_relationship_and_memory_context() -> None:
+    """The workflow should incorporate richer retrieval context when it is available."""
+
+    workflow = ReflectionWorkflow()
+    agent = AgentState(agent_id="agent-1", name="Villager 1", x=1, y=2)
+    context = ReflectionContext(
+        agent_id="agent-1",
+        trigger_reasons=["social_milestone"],
+        autobiography="A steady day in the village.",
+        recent_events=["agent-2 gave me berries.", "A nearby crop failed."],
+        goals=["Store grain before winter"],
+        relationships=["agent-2"],
+    )
+
+    result = workflow.run(agent, context)
+
+    assert result == ReflectionResult(
+        goals=["Store grain before winter"],
+        beliefs=[
+            "agent:agent-1:can_improve_outcomes_by_adapting_routines:yes",
+            "agent:agent-2:is_part_of_my_support_network:yes",
+        ],
+        memory_entries=["agent-2 gave me berries."],
+        planner_hints=["keep_routine"],
+    )
+
+
+def test_reflection_prompt_builder_includes_retrieval_context_fields() -> None:
+    """Prompt-building should expose the retrieved goals, relationships, and memories compactly."""
+
+    prompt = ReflectionPromptBuilder().build(
+        ReflectionContext(
+            agent_id="agent-1",
+            trigger_reasons=["day_rollover"],
+            autobiography="Ari ended the day tired but hopeful.",
+            recent_events=["agent-2 gave me berries.", "A child was born."],
+            goals=["Store grain", "Repair roof"],
+            relationships=["agent-2", "agent-3"],
+        )
+    )
+
+    assert prompt == (
+        "Agent agent-1; triggers=day_rollover; autobiography=Ari ended the day tired but hopeful.; "
+        "goals=Store grain,Repair roof; relationships=agent-2,agent-3; "
+        "recent_events=agent-2 gave me berries.; A child was born."
     )
 
 

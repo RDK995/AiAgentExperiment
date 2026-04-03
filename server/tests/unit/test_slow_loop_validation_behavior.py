@@ -9,14 +9,17 @@ import pytest
 
 from app.cognition.belief_updater import BeliefUpdater
 from app.cognition.goal_updater import GoalUpdater
+from app.cognition.reflection import ReflectionWorkflow
 from app.cognition.slow_loop import SlowLoopService
 from app.cognition.validation import ReflectionValidationError, ReflectionValidator
 from app.engine.event_bus import EventBus
 from app.engine.sim_clock import SimTick
 from app.engine.world_state import AgentState, WorldState
 from app.memory.retriever import MemoryRetriever
+from app.memory.retrieval import RetrievalContextService
 from app.memory.writer import MemoryWriter
 from app.schemas.event import EventType, SimulationEvent
+from app.schemas.memory import RetrievalContextResult, RetrievedGoalRecord, RetrievedMemoryRecord, RetrievedRelationshipRecord
 from app.schemas.reflection import MemoryCandidate
 from app.schemas.reflection import ReflectionContext, ReflectionResult
 
@@ -54,6 +57,18 @@ class SpyReflectionWorkflow:
 
     def run(self, agent: AgentState, context: ReflectionContext) -> ReflectionResult:
         self.calls.append(context)
+        return self.result
+
+
+@dataclass(slots=True)
+class SpyRetrievalContextService:
+    """Retrieval service spy for verifying slow-loop context assembly."""
+
+    result: RetrievalContextResult
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    def retrieve_context(self, agent: AgentState, *, query_text: str) -> RetrievalContextResult:
+        self.calls.append((agent.agent_id, query_text))
         return self.result
 
 
@@ -280,6 +295,126 @@ def test_day_rollover_expires_stale_daily_summary_candidates_from_quiet_days(
     ]
 
 
+def test_slow_loop_uses_retrieval_context_service_when_available(
+    simple_world: WorldState,
+    slow_loop_tick: SimTick,
+) -> None:
+    """When configured, slow-loop reflection should consume the retrieval pipeline output directly."""
+
+    retrieval_service = SpyRetrievalContextService(
+        result=RetrievalContextResult(
+            summary="Persistent biography summary.",
+            goals=[RetrievedGoalRecord(title="Store grain", priority=2.0, status="active")],
+            relationships=[
+                RetrievedRelationshipRecord(
+                    related_agent_id="agent-2",
+                    score=1.75,
+                    trust=0.8,
+                    admiration=0.6,
+                    familiarity=0.35,
+                    attraction=0.1,
+                    obligation=0.2,
+                    resentment=0.0,
+                    fear=0.0,
+                    dependency=0.0,
+                    last_interaction_tick=5,
+                )
+            ],
+            memories=[
+                RetrievedMemoryRecord(raw_text="agent-2 gave me berries.", salience=0.95, valence=0.7),
+                RetrievedMemoryRecord(raw_text="A nearby crop failed.", salience=0.8, valence=-0.6),
+            ],
+        )
+    )
+    slow_loop, _, _, workflow, _, _, _ = _build_service(retrieval_service=retrieval_service)
+    event_bus = _event_bus_for(
+        SimulationEvent(
+            type=EventType.MAJOR_LIFE_EVENT,
+            tick=slow_loop_tick.tick,
+            sim_time=slow_loop_tick.at,
+            agent_id=simple_world.agents[0].agent_id,
+            payload={"kind": "harvest_loss"},
+        )
+    )
+
+    slow_loop.handle_post_fast_loop(simple_world, slow_loop_tick, event_bus)
+
+    assert retrieval_service.calls == [
+        (simple_world.agents[0].agent_id, "Maintain daily routine idle major_life_event")
+    ]
+    assert workflow.calls[0].autobiography == "Persistent biography summary."
+    assert workflow.calls[0].recent_events == [
+        "agent-2 gave me berries.",
+        "A nearby crop failed.",
+    ]
+    assert workflow.calls[0].goals == ["Store grain"]
+    assert workflow.calls[0].relationships == ["agent-2"]
+
+
+def test_slow_loop_applies_retrieval_enriched_reflection_outputs(
+    simple_world: WorldState,
+    slow_loop_tick: SimTick,
+) -> None:
+    """Retrieved goals and memories should meaningfully affect applied slow-loop outputs."""
+
+    retrieval_service = SpyRetrievalContextService(
+        result=RetrievalContextResult(
+            summary="Persistent biography summary.",
+            goals=[RetrievedGoalRecord(title="Store grain before winter", priority=2.5, status="active")],
+            relationships=[
+                RetrievedRelationshipRecord(
+                    related_agent_id="agent-2",
+                    score=1.5,
+                    trust=0.7,
+                    admiration=0.3,
+                    familiarity=0.4,
+                    attraction=0.0,
+                    obligation=0.1,
+                    resentment=0.0,
+                    fear=0.0,
+                    dependency=0.0,
+                    last_interaction_tick=4,
+                )
+            ],
+            memories=[
+                RetrievedMemoryRecord(raw_text="agent-2 gave me berries.", salience=0.95, valence=0.7),
+            ],
+        )
+    )
+    goal_updater = SpyGoalUpdater()
+    belief_updater = SpyBeliefUpdater()
+    memory_writer = SpyMemoryWriter()
+    slow_loop = SlowLoopService(
+        memory_retriever=SpyMemoryRetriever(returned_events=[]),
+        autobiography_builder=SpyAutobiographyBuilder(output="unused"),
+        reflection_workflow=ReflectionWorkflow(),
+        validator=ReflectionValidator(),
+        goal_updater=goal_updater,
+        belief_updater=belief_updater,
+        memory_writer=memory_writer,
+        retrieval_service=retrieval_service,
+    )
+    event_bus = _event_bus_for(
+        SimulationEvent(
+            type=EventType.MAJOR_LIFE_EVENT,
+            tick=slow_loop_tick.tick,
+            sim_time=slow_loop_tick.at,
+            agent_id=simple_world.agents[0].agent_id,
+            payload={"kind": "hard_winter"},
+        )
+    )
+
+    slow_loop.handle_post_fast_loop(simple_world, slow_loop_tick, event_bus)
+
+    assert goal_updater.calls == [["Store grain before winter"]]
+    assert belief_updater.calls == [[
+        "agent:agent-1:can_improve_outcomes_by_adapting_routines:yes",
+        "agent:agent-2:is_part_of_my_support_network:yes",
+    ]]
+    assert memory_writer.calls == [["agent-2 gave me berries."]]
+    assert simple_world.agents[0].current_goal == "Store grain before winter"
+
+
 def test_reflection_output_is_validated_before_application(
     simple_world: WorldState,
     slow_loop_tick: SimTick,
@@ -474,6 +609,7 @@ def _build_service(
     *,
     memory_retriever: SpyMemoryRetriever | None = None,
     autobiography_builder: SpyAutobiographyBuilder | None = None,
+    retrieval_service: RetrievalContextService | SpyRetrievalContextService | None = None,
     reflection_result: ReflectionResult | None = None,
     validator: ReflectionValidator | RejectingValidator | None = None,
     goal_updater: GoalUpdater | SpyGoalUpdater | None = None,
@@ -515,6 +651,7 @@ def _build_service(
             goal_updater=goal_writer,
             belief_updater=belief_writer,
             memory_writer=memory_persister,
+            retrieval_service=retrieval_service,
         ),
         retriever,
         builder,

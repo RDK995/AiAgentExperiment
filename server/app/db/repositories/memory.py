@@ -43,6 +43,14 @@ class SemanticBeliefCreateParams:
     evidence_count: int = 1
 
 
+@dataclass(slots=True)
+class EmbeddedMemoryRecord:
+    """Joined episodic-memory row and embedding vector for retrieval-time similarity search."""
+
+    memory: EpisodicMemory
+    embedding: list[float]
+
+
 class MemoryRepository:
     """Persistence helper for memory-oriented records."""
 
@@ -214,3 +222,31 @@ class MemoryRepository:
         if limit is not None:
             statement = statement.limit(limit)
         return list(self._session.scalars(statement))
+
+    def list_embedded_memories_for_agent(
+        self,
+        agent_id: uuid.UUID,
+        *,
+        include_archived: bool = False,
+        limit: int | None = None,
+    ) -> list[EmbeddedMemoryRecord]:
+        """Return episodic memories that have embeddings attached for one agent."""
+
+        statement = (
+            select(EpisodicMemory, MemoryEmbedding.embedding)
+            .join(MemoryEmbedding, MemoryEmbedding.memory_id == EpisodicMemory.id)
+            .where(EpisodicMemory.agent_id == agent_id)
+        )
+        if not include_archived:
+            statement = statement.where(EpisodicMemory.archived.is_(False))
+        statement = statement.order_by(
+            EpisodicMemory.tick.desc(),
+            EpisodicMemory.salience.desc(),
+            EpisodicMemory.id,
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        return [
+            EmbeddedMemoryRecord(memory=memory, embedding=embedding)
+            for memory, embedding in self._session.execute(statement).all()
+        ]

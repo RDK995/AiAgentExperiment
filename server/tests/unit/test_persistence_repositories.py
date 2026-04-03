@@ -315,6 +315,98 @@ def test_memory_repository_creates_and_queries_memories_and_beliefs(db_session: 
     assert beliefs[0].object_value == "yes"
 
 
+def test_memory_repository_supports_filtered_memory_and_belief_queries(db_session: Session) -> None:
+    """The memory repository should support retrieval filters for salience, recency, and belief confidence."""
+
+    agent_repository = AgentRepository(db_session)
+    memory_repository = MemoryRepository(db_session)
+    agent = agent_repository.create_agent_bundle(
+        AgentCreateParams(
+            name="Iris",
+            sex=AgentSex.FEMALE,
+            birth_tick=0,
+            current_tile_x=2,
+            current_tile_y=2,
+            stage_of_life=StageOfLife.ADULT,
+        )
+    )
+    memory_repository.create_memory(
+        EpisodicMemoryCreateParams(
+            agent_id=agent.id,
+            tick=10,
+            event_type="greeting",
+            raw_text="A quick greeting.",
+            valence=0.1,
+            salience=0.15,
+        )
+    )
+    high_salience = memory_repository.create_memory(
+        EpisodicMemoryCreateParams(
+            agent_id=agent.id,
+            tick=20,
+            event_type="gift_given",
+            raw_text="Received a high-value gift.",
+            valence=0.7,
+            salience=0.88,
+        )
+    )
+    most_recent = memory_repository.create_memory(
+        EpisodicMemoryCreateParams(
+            agent_id=agent.id,
+            tick=25,
+            event_type="crop_failed",
+            raw_text="A nearby crop failed.",
+            valence=-0.7,
+            salience=0.81,
+        )
+    )
+    memory_repository.create_belief(
+        SemanticBeliefCreateParams(
+            agent_id=agent.id,
+            subject_type="agent",
+            predicate="is_generous",
+            object_value="yes",
+            confidence=0.84,
+            last_supported_tick=30,
+        )
+    )
+    memory_repository.create_belief(
+        SemanticBeliefCreateParams(
+            agent_id=agent.id,
+            subject_type="world",
+            predicate="resource_scarcity",
+            object_value="food_near_2_2",
+            confidence=0.62,
+            last_supported_tick=31,
+        )
+    )
+    db_session.commit()
+
+    salience_sorted = memory_repository.list_memories_for_agent(
+        agent.id,
+        min_salience=0.80,
+        sort_by="salience",
+        limit=5,
+    )
+    recency_sorted = memory_repository.list_memories_for_agent(
+        agent.id,
+        min_tick=15,
+        sort_by="recency",
+        limit=5,
+    )
+    filtered_beliefs = memory_repository.list_beliefs_for_agent(
+        agent.id,
+        subject_type="agent",
+        predicate="is_generous",
+        min_confidence=0.80,
+    )
+
+    assert [memory.id for memory in salience_sorted] == [high_salience.id, most_recent.id]
+    assert [memory.id for memory in recency_sorted] == [most_recent.id, high_salience.id]
+    assert len(filtered_beliefs) == 1
+    assert filtered_beliefs[0].predicate == "is_generous"
+
+
 def test_world_repository_creates_world_events_with_payload_and_actor_ids(db_session: Session) -> None:
     """The world repository should create world events through thin parameter helpers."""
 

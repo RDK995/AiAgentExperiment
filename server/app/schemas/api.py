@@ -182,6 +182,26 @@ class EpisodesResponse(BaseModel):
     episodes: list[MemoryEpisodeSummary]
 
 
+class DailySummaryCandidateSummary(BaseModel):
+    """Transport-safe daily-summary candidate view for one agent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    salience: float = Field(ge=0.0, le=1.0)
+    valence: float = Field(ge=-1.0, le=1.0)
+
+
+class DailySummaryCandidatesResponse(BaseModel):
+    """Consistent response wrapper for queued daily-summary candidates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    day_index: int | None = Field(default=None, ge=0)
+    candidates: list[DailySummaryCandidateSummary]
+
+
 class BeliefSummary(BaseModel):
     """Lightweight semantic belief summary."""
 

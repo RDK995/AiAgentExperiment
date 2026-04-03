@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import uuid
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -92,13 +93,26 @@ class MemoryRepository:
         agent_id: uuid.UUID,
         *,
         include_archived: bool = False,
+        min_salience: float | None = None,
+        min_tick: int | None = None,
+        sort_by: Literal["recency", "salience"] = "recency",
+        limit: int | None = None,
     ) -> list[EpisodicMemory]:
         """List episodic memories for an agent, newest tick first."""
 
         statement = select(EpisodicMemory).where(EpisodicMemory.agent_id == agent_id)
         if not include_archived:
             statement = statement.where(EpisodicMemory.archived.is_(False))
-        statement = statement.order_by(EpisodicMemory.tick.desc(), EpisodicMemory.salience.desc(), EpisodicMemory.id)
+        if min_salience is not None:
+            statement = statement.where(EpisodicMemory.salience >= min_salience)
+        if min_tick is not None:
+            statement = statement.where(EpisodicMemory.tick >= min_tick)
+        if sort_by == "salience":
+            statement = statement.order_by(EpisodicMemory.salience.desc(), EpisodicMemory.tick.desc(), EpisodicMemory.id)
+        else:
+            statement = statement.order_by(EpisodicMemory.tick.desc(), EpisodicMemory.salience.desc(), EpisodicMemory.id)
+        if limit is not None:
+            statement = statement.limit(limit)
         return list(self._session.scalars(statement))
 
     def create_belief(self, params: SemanticBeliefCreateParams) -> SemanticBelief:
@@ -116,11 +130,87 @@ class MemoryRepository:
         )
         return self.add_belief(belief)
 
-    def list_beliefs_for_agent(self, agent_id: uuid.UUID) -> list[SemanticBelief]:
+    def get_matching_belief(
+        self,
+        *,
+        agent_id: uuid.UUID,
+        subject_type: str,
+        predicate: str,
+        object_value: str,
+        subject_id: uuid.UUID | None = None,
+    ) -> SemanticBelief | None:
+        """Return an existing belief row that matches the semantic identity."""
+
+        statement = select(SemanticBelief).where(
+            SemanticBelief.agent_id == agent_id,
+            SemanticBelief.subject_type == subject_type,
+            SemanticBelief.subject_id == subject_id,
+            SemanticBelief.predicate == predicate,
+            SemanticBelief.object_value == object_value,
+        )
+        return self._session.scalar(statement)
+
+    def support_belief(
+        self,
+        *,
+        agent_id: uuid.UUID,
+        subject_type: str,
+        predicate: str,
+        object_value: str,
+        confidence: float,
+        last_supported_tick: int,
+        subject_id: uuid.UUID | None = None,
+    ) -> SemanticBelief:
+        """Insert or reinforce a semantic belief row deterministically."""
+
+        belief = self.get_matching_belief(
+            agent_id=agent_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            predicate=predicate,
+            object_value=object_value,
+        )
+        if belief is None:
+            return self.create_belief(
+                SemanticBeliefCreateParams(
+                    agent_id=agent_id,
+                    subject_type=subject_type,
+                    subject_id=subject_id,
+                    predicate=predicate,
+                    object_value=object_value,
+                    confidence=confidence,
+                    last_supported_tick=last_supported_tick,
+                )
+            )
+        belief.evidence_count += 1
+        belief.last_supported_tick = last_supported_tick
+        belief.confidence = min(1.0, max(belief.confidence, confidence) + 0.05)
+        self._session.flush()
+        return belief
+
+    def list_beliefs_for_agent(
+        self,
+        agent_id: uuid.UUID,
+        *,
+        subject_type: str | None = None,
+        predicate: str | None = None,
+        min_confidence: float | None = None,
+        limit: int | None = None,
+    ) -> list[SemanticBelief]:
         """List semantic beliefs for an agent."""
 
-        statement = select(SemanticBelief).where(SemanticBelief.agent_id == agent_id).order_by(
+        statement = select(SemanticBelief).where(SemanticBelief.agent_id == agent_id)
+        if subject_type is not None:
+            statement = statement.where(SemanticBelief.subject_type == subject_type)
+        if predicate is not None:
+            statement = statement.where(SemanticBelief.predicate == predicate)
+        if min_confidence is not None:
+            statement = statement.where(SemanticBelief.confidence >= min_confidence)
+        statement = statement.order_by(
+            SemanticBelief.confidence.desc(),
             SemanticBelief.last_supported_tick.desc(),
             SemanticBelief.id,
         )
+        if limit is not None:
+            statement = statement.limit(limit)
         return list(self._session.scalars(statement))

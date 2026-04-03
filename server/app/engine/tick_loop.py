@@ -25,7 +25,6 @@ from app.cognition.slow_loop import SlowLoopService
 from app.cognition.validation import ReflectionValidator
 from app.engine.event_bus import EventBus
 from app.engine.event_listeners import (
-    MemoryEventListener,
     RelationshipEventListener,
     ReplayEventLog,
     WorldEventPersistenceListener,
@@ -35,7 +34,9 @@ from app.engine.scheduler import TaskScheduler
 from app.engine.sim_clock import SimulationClock
 from app.engine.world_loop import WorldLoop
 from app.engine.world_state import AgentState, ItemStackState, WorldState, build_initial_world_state
+from app.memory.embeddings import EmbeddingProvider
 from app.memory.retriever import MemoryRetriever
+from app.memory.pipeline import MemoryPipelineListener
 from app.memory.writer import MemoryWriter
 from app.schemas.api import (
     AdvanceDaysResponse,
@@ -43,6 +44,8 @@ from app.schemas.api import (
     BeliefsResponse,
     BeliefSummary,
     ChunkResponse,
+    DailySummaryCandidateSummary,
+    DailySummaryCandidatesResponse,
     DebugMetricsResponse,
     EpisodesResponse,
     ForceReflectResponse,
@@ -77,6 +80,7 @@ class SimulationRuntime:
         *,
         world_event_session_scope: Callable[[], AbstractContextManager[Session]] | None = None,
         persistent_agent_id_resolver: Callable[[str], uuid.UUID | None] | None = None,
+        memory_embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self._world_state = initial_state
         self._tick_interval_seconds = tick_interval_seconds
@@ -89,13 +93,15 @@ class SimulationRuntime:
         self._telemetry = TelemetryRecorder()
         self._replay_log = ReplayEventLog(max_events=200)
         self._recent_events: list[SimulationEvent] = []
+        self._memory_retriever = MemoryRetriever()
+        self._memory_embedding_provider = memory_embedding_provider
         self._event_bus = self._build_event_bus()
         self._sim_clock = SimulationClock(
             start_time=initial_state.current_time,
             tick_interval=timedelta(seconds=tick_interval_seconds),
         )
         self._slow_loop_service = SlowLoopService(
-            memory_retriever=MemoryRetriever(),
+            memory_retriever=self._memory_retriever,
             autobiography_builder=AutobiographyBuilder(),
             reflection_workflow=ReflectionWorkflow(),
             validator=ReflectionValidator(),
@@ -331,6 +337,24 @@ class SimulationRuntime:
                 episodes=[MemoryEpisodeSummary(text=memory, tick=None) for memory in reversed(agent.memories)]
             )
 
+    async def get_daily_summary_candidates(self, agent_id: str) -> DailySummaryCandidatesResponse:
+        """Return queued daily-summary candidates for one agent."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            return DailySummaryCandidatesResponse(
+                agent_id=agent_id,
+                day_index=agent.daily_summary_day_index,
+                candidates=[
+                    DailySummaryCandidateSummary(
+                        text=candidate.text,
+                        salience=candidate.salience,
+                        valence=candidate.valence,
+                    )
+                    for candidate in agent.daily_summary_candidates
+                ],
+            )
+
     async def get_memory_beliefs(self, agent_id: str) -> BeliefsResponse:
         """Return prototype semantic beliefs stored on the authoritative agent state."""
 
@@ -356,7 +380,7 @@ class SimulationRuntime:
 
         async with self._lock:
             agent = self._require_agent(agent_id)
-            recent = agent.memories[-3:]
+            recent = self._memory_retriever.retrieve_recent_events(agent)[:3]
             return MemorySummarizeResponse(
                 agent_id=agent_id,
                 summary=" | ".join(recent) if recent else "No memories available.",
@@ -633,7 +657,13 @@ class SimulationRuntime:
         event_bus.subscribe_all(self._telemetry.observe_event)
         event_bus.subscribe_all(self._replay_log.handle)
         event_bus.subscribe_all(
-            MemoryEventListener(lambda: self._world_state, MemoryWriter()).handle
+            MemoryPipelineListener(
+                lambda: self._world_state,
+                memory_writer=MemoryWriter(),
+                session_scope=self._world_event_session_scope,
+                resolve_agent_id=self._persistent_agent_id_resolver,
+                embedding_provider=self._memory_embedding_provider,
+            ).handle
         )
         event_bus.subscribe_all(RelationshipEventListener(lambda: self._world_state).handle)
         if self._world_event_session_scope is not None:

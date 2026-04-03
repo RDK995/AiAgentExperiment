@@ -10,6 +10,7 @@ from typing import Any
 from app.db.enums import AgentSex, StageOfLife
 from app.schemas.agent import AgentNeedState, AgentSnapshot, AgentStateSnapshot, MoodSchema, NeedsSchema
 from app.schemas.api import SimulationSnapshot, TileSnapshot
+from app.schemas.reflection import MemoryCandidate
 
 
 class TerrainType(str, Enum):
@@ -85,6 +86,8 @@ class AgentState:
     pending_planner_hints: list[str] = field(default_factory=list)
     beliefs: list[str] = field(default_factory=list)
     memories: list[str] = field(default_factory=list)
+    daily_summary_day_index: int | None = None
+    daily_summary_candidates: list[MemoryCandidate] = field(default_factory=list)
     is_threat: bool = False
     has_infant_care_duty: bool = False
     pregnancy_progress_ticks: int | None = None

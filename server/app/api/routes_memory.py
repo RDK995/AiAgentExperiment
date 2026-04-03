@@ -7,6 +7,7 @@ from app.api.dependencies import get_runtime
 from app.engine.tick_loop import SimulationRuntime
 from app.schemas.api import (
     BeliefsResponse,
+    DailySummaryCandidatesResponse,
     EpisodesResponse,
     MemoryRetrieveRequest,
     MemoryRetrieveResponse,
@@ -38,6 +39,23 @@ async def get_agent_beliefs(
 
     try:
         return await runtime.get_memory_beliefs(agent_id)
+    except LookupError as exc:
+        raise not_found(str(exc)) from exc
+
+
+@router.get(
+    "/{agent_id}/daily-summary-candidates",
+    response_model=DailySummaryCandidatesResponse,
+    responses=error_responses(404),
+)
+async def get_daily_summary_candidates(
+    agent_id: str,
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> DailySummaryCandidatesResponse:
+    """Return queued daily-summary candidates for one authoritative agent."""
+
+    try:
+        return await runtime.get_daily_summary_candidates(agent_id)
     except LookupError as exc:
         raise not_found(str(exc)) from exc
 

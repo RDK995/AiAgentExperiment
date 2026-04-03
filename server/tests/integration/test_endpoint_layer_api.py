@@ -47,6 +47,7 @@ def test_app_registers_new_endpoint_groups(client: TestClient) -> None:
     assert "/api/v1/agents/{agent_id}/force-reflect" in route_paths
     assert "/api/v1/memory/{agent_id}/episodes" in route_paths
     assert "/api/v1/memory/{agent_id}/beliefs" in route_paths
+    assert "/api/v1/memory/{agent_id}/daily-summary-candidates" in route_paths
     assert "/api/v1/memory/{agent_id}/retrieve" in route_paths
     assert "/api/v1/memory/{agent_id}/summarize" in route_paths
     assert "/api/v1/debug/metrics" in route_paths
@@ -227,15 +228,18 @@ def test_memory_routes_return_successful_responses_for_known_agent(client: TestC
 
     episodes = client.get("/api/v1/memory/agent-1/episodes")
     beliefs = client.get("/api/v1/memory/agent-1/beliefs")
+    candidates = client.get("/api/v1/memory/agent-1/daily-summary-candidates")
     retrieved = client.post("/api/v1/memory/agent-1/retrieve", json={"query": "Villager", "limit": 5})
     summary = client.post("/api/v1/memory/agent-1/summarize")
 
     assert episodes.status_code == 200
     assert beliefs.status_code == 200
+    assert candidates.status_code == 200
     assert retrieved.status_code == 200
     assert summary.status_code == 200
     assert isinstance(episodes.json()["episodes"], list)
     assert isinstance(beliefs.json()["beliefs"], list)
+    assert isinstance(candidates.json()["candidates"], list)
     assert retrieved.json()["agent_id"] == "agent-1"
     assert "memory_count" in summary.json()
     assert isinstance(EpisodesResponse.model_validate(episodes.json()), EpisodesResponse)
@@ -248,6 +252,7 @@ def test_memory_routes_return_not_found_for_missing_agent(client: TestClient) ->
 
     episodes = client.get("/api/v1/memory/missing-agent/episodes")
     beliefs = client.get("/api/v1/memory/missing-agent/beliefs")
+    candidates = client.get("/api/v1/memory/missing-agent/daily-summary-candidates")
     retrieved = client.post("/api/v1/memory/missing-agent/retrieve", json={"query": "storm", "limit": 3})
     summary = client.post("/api/v1/memory/missing-agent/summarize")
 
@@ -257,10 +262,12 @@ def test_memory_routes_return_not_found_for_missing_agent(client: TestClient) ->
     }
     assert episodes.status_code == 404
     assert beliefs.status_code == 404
+    assert candidates.status_code == 404
     assert retrieved.status_code == 404
     assert summary.status_code == 404
     assert episodes.json() == expected
     assert beliefs.json() == expected
+    assert candidates.json() == expected
     assert retrieved.json() == expected
     assert summary.json() == expected
 

@@ -331,8 +331,8 @@ def test_runtime_event_bus_projects_memories_and_telemetry_aggregates() -> None:
             source_module="integration-test",
         )
 
-        assert "A gift changed hands." in runtime._world_state.agents[0].memories
-        assert "A gift changed hands." in runtime._world_state.agents[1].memories
+        assert "Gave berries to agent-2." in runtime._world_state.agents[0].memories
+        assert "agent-1 gave me berries." in runtime._world_state.agents[1].memories
 
         await runtime.step_once()
         metrics = await runtime.get_debug_metrics()
@@ -436,8 +436,8 @@ def test_runtime_event_bus_fans_out_lifecycle_domain_events_with_optional_persis
             source_module="integration-test",
         )
 
-        assert "A child was born." in runtime._world_state.agents[0].memories
-        assert "Death changed the village." in runtime._world_state.agents[0].memories
+        assert "agent-2 was born." in runtime._world_state.agents[0].memories
+        assert "agent-1 died." in runtime._world_state.agents[0].memories
 
         await runtime.step_once()
         replay = await runtime.get_replay_events(limit=20)

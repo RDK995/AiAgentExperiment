@@ -11,4 +11,22 @@ class MemoryRetriever:
     def retrieve_recent_events(self, agent: AgentState) -> list[str]:
         """Return a bounded list of recent memories."""
 
-        return list(agent.memories[-5:])
+        queued_candidates = [
+            candidate.text
+            for candidate in sorted(
+                agent.daily_summary_candidates,
+                key=lambda candidate: (-candidate.salience, candidate.text),
+            )
+        ]
+        recent_memories = list(reversed(agent.memories[-10:]))
+        combined = queued_candidates + recent_memories
+        deduplicated: list[str] = []
+        seen: set[str] = set()
+        for entry in combined:
+            if entry in seen:
+                continue
+            deduplicated.append(entry)
+            seen.add(entry)
+            if len(deduplicated) >= 5:
+                break
+        return deduplicated

@@ -45,6 +45,8 @@ class EventBus:
         if event.event_id is None:
             event.event_id = f"evt-{self._next_event_index}"
             self._next_event_index += 1
+        else:
+            self._advance_sequence_for_explicit_id(event.event_id)
         self._events.append(event)
         for handler in self._typed_listeners.get(event.type, []):
             handler(event)
@@ -63,3 +65,16 @@ class EventBus:
         events = list(self._events)
         self._events.clear()
         return events
+
+    def _advance_sequence_for_explicit_id(self, event_id: str) -> None:
+        """Keep auto-generated ids ahead of explicit ids that share the evt-N namespace."""
+
+        prefix = "evt-"
+        if not event_id.startswith(prefix):
+            return
+        suffix = event_id[len(prefix) :]
+        if not suffix.isdigit():
+            return
+        explicit_index = int(suffix)
+        if explicit_index >= self._next_event_index:
+            self._next_event_index = explicit_index + 1

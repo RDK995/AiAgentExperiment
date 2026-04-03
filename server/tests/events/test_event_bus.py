@@ -132,6 +132,24 @@ def test_event_bus_assigns_monotonic_event_ids_and_preserves_existing_ids() -> N
     assert [event.event_id for event in drained] == ["evt-1", "evt-2", "external-42"]
 
 
+def test_explicit_evt_namespace_ids_advance_the_auto_id_sequence() -> None:
+    """Explicit evt-N ids should move the auto-id cursor forward to avoid collisions."""
+
+    bus = EventBus()
+    imported = _event(EventType.GIFT_GIVEN)
+    imported.event_id = "evt-7"
+    next_event = _event(EventType.AGENT_ATE)
+
+    bus.emit(imported)
+    bus.emit(next_event)
+
+    drained = bus.drain()
+
+    assert imported.event_id == "evt-7"
+    assert next_event.event_id == "evt-8"
+    assert [event.event_id for event in drained] == ["evt-7", "evt-8"]
+
+
 def test_listener_failure_stops_later_listeners_after_the_failure_point() -> None:
     """Fail-fast dispatch should stop subsequent listeners once a listener raises."""
 

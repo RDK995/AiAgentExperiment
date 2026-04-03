@@ -1,85 +1,147 @@
 """World and simulation control routes."""
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Query
 
+from app.api.errors import bad_request, conflict, error_responses, not_found
+from app.api.dependencies import get_runtime
 from app.engine.tick_loop import SimulationRuntime
 from app.schemas.agent import AgentStateSnapshot
-from app.schemas.api import MoveAgentRequest, RunSimulationRequest, SimulationSnapshot
+from app.schemas.api import (
+    AgentListResponse,
+    ChunkResponse,
+    MoveAgentRequest,
+    RecentWorldEventsResponse,
+    RunSimulationRequest,
+    SeedResponse,
+    SimulationSnapshot,
+    WorldSeedRequest,
+)
 
 router = APIRouter(prefix="/world", tags=["world"])
 
 
-def get_runtime(request: Request) -> SimulationRuntime:
-    """Resolve the shared simulation runtime from application state."""
-
-    return request.app.state.simulation_runtime
-
-
 @router.get("/snapshot", response_model=SimulationSnapshot)
-async def get_world_snapshot(request: Request) -> SimulationSnapshot:
+async def get_world_snapshot(runtime: SimulationRuntime = Depends(get_runtime)) -> SimulationSnapshot:
     """Return the latest authoritative world snapshot."""
 
-    runtime = get_runtime(request)
     return await runtime.get_snapshot()
 
 
 @router.get("/state", response_model=SimulationSnapshot)
-async def get_world_state(request: Request) -> SimulationSnapshot:
+async def get_world_state(runtime: SimulationRuntime = Depends(get_runtime)) -> SimulationSnapshot:
     """Return the latest authoritative world state snapshot."""
 
-    runtime = get_runtime(request)
     return await runtime.get_snapshot()
 
 
-@router.get("/agents", response_model=list[AgentStateSnapshot])
-async def get_agent_snapshots(request: Request) -> list[AgentStateSnapshot]:
+@router.get("/agents", response_model=AgentListResponse)
+async def get_agent_snapshots(runtime: SimulationRuntime = Depends(get_runtime)) -> AgentListResponse:
     """Return richer backend-facing snapshots for all authoritative agents."""
 
-    runtime = get_runtime(request)
-    return await runtime.get_agent_snapshots()
+    return AgentListResponse(agents=await runtime.get_agent_snapshots())
 
 
-@router.get("/agents/{agent_id}", response_model=AgentStateSnapshot)
-async def get_agent_snapshot(agent_id: str, request: Request) -> AgentStateSnapshot:
+@router.get(
+    "/agents/{agent_id}",
+    response_model=AgentStateSnapshot,
+    responses=error_responses(404),
+)
+async def get_agent_snapshot(
+    agent_id: str,
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> AgentStateSnapshot:
     """Return a richer backend-facing snapshot for a specific authoritative agent."""
 
-    runtime = get_runtime(request)
     try:
         return await runtime.get_agent_snapshot(agent_id)
     except LookupError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
+        raise not_found(str(exc)) from exc
 
 
 @router.post("/tick", response_model=SimulationSnapshot)
-async def step_world_once(request: Request) -> SimulationSnapshot:
+async def step_world_once(runtime: SimulationRuntime = Depends(get_runtime)) -> SimulationSnapshot:
     """Advance the simulation by a single authoritative tick."""
 
-    runtime = get_runtime(request)
     return await runtime.step_once()
 
 
 @router.post("/run", response_model=SimulationSnapshot)
 async def run_world(
     payload: RunSimulationRequest,
-    request: Request,
+    runtime: SimulationRuntime = Depends(get_runtime),
 ) -> SimulationSnapshot:
     """Advance the simulation by a client-requested number of ticks."""
 
-    runtime = get_runtime(request)
     return await runtime.run_for_ticks(payload.ticks)
 
 
-@router.post("/actions/move", response_model=SimulationSnapshot)
+@router.post("/tick/run", response_model=SimulationSnapshot)
+async def run_world_ticks(
+    payload: RunSimulationRequest,
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> SimulationSnapshot:
+    """Advance the simulation by one or more authoritative ticks."""
+
+    return await runtime.run_for_ticks(payload.ticks)
+
+
+@router.get(
+    "/chunk/{x}/{y}",
+    response_model=ChunkResponse,
+    responses=error_responses(400),
+)
+async def get_world_chunk(
+    x: int,
+    y: int,
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> ChunkResponse:
+    """Return a deterministic chunk view anchored at the requested tile."""
+
+    if x < 0 or y < 0:
+        raise bad_request("Chunk coordinates must be non-negative.")
+    try:
+        return await runtime.get_world_chunk(x, y)
+    except ValueError as exc:
+        raise bad_request(str(exc)) from exc
+
+
+@router.get("/events/recent", response_model=RecentWorldEventsResponse)
+async def get_recent_world_events(
+    limit: int = Query(default=20, ge=1, le=100),
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> RecentWorldEventsResponse:
+    """Return the most recent authoritative world events."""
+
+    return RecentWorldEventsResponse(events=await runtime.get_recent_world_events(limit=limit))
+
+
+@router.post("/seed", response_model=SeedResponse)
+async def seed_world(
+    payload: WorldSeedRequest | None = None,
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> SeedResponse:
+    """Reset and reseed the world to a clean deterministic baseline."""
+
+    snapshot = await runtime.seed_world(initial_agent_count=payload.agent_count if payload is not None else None)
+    return SeedResponse(
+        status="seeded",
+        tick=snapshot.tick,
+        width=snapshot.world.width,
+        height=snapshot.world.height,
+        seeded_agents=len(snapshot.agents),
+    )
+
+
+@router.post(
+    "/actions/move",
+    response_model=SimulationSnapshot,
+    responses=error_responses(404, 409),
+)
 async def move_agent(
     payload: MoveAgentRequest,
-    request: Request,
+    runtime: SimulationRuntime = Depends(get_runtime),
 ) -> SimulationSnapshot:
     """Attempt an authoritative move action for a specific agent."""
-
-    runtime = get_runtime(request)
 
     try:
         return await runtime.move_agent(
@@ -88,12 +150,6 @@ async def move_agent(
             target_y=payload.target_y,
         )
     except LookupError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
+        raise not_found(str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+        raise conflict(str(exc)) from exc

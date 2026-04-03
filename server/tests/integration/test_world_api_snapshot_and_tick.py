@@ -120,7 +120,10 @@ def test_post_move_action_rejects_invalid_action_without_mutating_state(
     )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Illegal move for current world state."}
+    assert response.json() == {
+        "error": "conflict",
+        "message": "Illegal move for current world state.",
+    }
 
     after = client.get("/api/v1/world/snapshot").json()
     assert _without_generated_at(after) == _without_generated_at(before)
@@ -139,7 +142,10 @@ def test_post_move_action_rejects_unknown_agent(client: TestClient) -> None:
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Unknown agent 'missing-agent'."}
+    assert response.json() == {
+        "error": "not_found",
+        "message": "Unknown agent 'missing-agent'.",
+    }
 
 
 def test_run_endpoint_rejects_invalid_request_schema(client: TestClient) -> None:

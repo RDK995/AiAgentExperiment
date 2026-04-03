@@ -22,12 +22,36 @@ from app.engine.rules.simulation_rules import is_action_legal
 from app.engine.scheduler import TaskScheduler
 from app.engine.sim_clock import SimulationClock
 from app.engine.world_loop import WorldLoop
-from app.engine.world_state import AgentState, WorldState
+from app.engine.world_state import AgentState, WorldState, build_initial_world_state
 from app.memory.retriever import MemoryRetriever
 from app.memory.writer import MemoryWriter
-from app.schemas.api import SimulationSnapshot
+from app.schemas.api import (
+    AdvanceDaysResponse,
+    AgentInspectResponse,
+    BeliefsResponse,
+    BeliefSummary,
+    ChunkResponse,
+    DebugMetricsResponse,
+    EpisodesResponse,
+    ForceReflectResponse,
+    GoalsResponse,
+    GoalSummary,
+    HouseholdInspectResponse,
+    MemoryEpisodeSummary,
+    MemoryRetrieveResponse,
+    MemorySummarizeResponse,
+    RelationshipsResponse,
+    RelationshipSummary,
+    ReplayResponse,
+    ReplayEventResponse,
+    ResetWorldResponse,
+    SimulationSnapshot,
+    SpawnFoodResponse,
+    TimelineEntry,
+    TimelineResponse,
+)
 from app.schemas.agent import AgentStateSnapshot
-from app.schemas.event import EventType, SimulationEvent
+from app.schemas.event import EventType, SimulationEvent, WorldEventSchema
 from app.telemetry.metrics import TelemetryRecorder
 
 
@@ -43,6 +67,7 @@ class SimulationRuntime:
         self._event_bus = EventBus()
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
+        self._recent_events: list[SimulationEvent] = []
         self._sim_clock = SimulationClock(
             start_time=initial_state.current_time,
             tick_interval=timedelta(seconds=tick_interval_seconds),
@@ -161,6 +186,276 @@ class SimulationRuntime:
             agent.current_action = "walking"
             return self._world_state.to_snapshot()
 
+    async def get_world_chunk(self, anchor_x: int, anchor_y: int, size: int = 4) -> ChunkResponse:
+        """Return a deterministic square chunk anchored at a world tile."""
+
+        async with self._lock:
+            if anchor_x >= self._world_state.width or anchor_y >= self._world_state.height:
+                raise ValueError("Chunk coordinates must fall within world bounds.")
+            max_x = min(self._world_state.width, anchor_x + size)
+            max_y = min(self._world_state.height, anchor_y + size)
+            return ChunkResponse(
+                anchor_x=anchor_x,
+                anchor_y=anchor_y,
+                width=max_x - anchor_x,
+                height=max_y - anchor_y,
+                tiles=[
+                    {
+                        "x": tile.x,
+                        "y": tile.y,
+                        "terrain": tile.terrain.value,
+                        "walkable": tile.walkable,
+                    }
+                    for tile in self._world_state.tiles
+                    if anchor_x <= tile.x < max_x and anchor_y <= tile.y < max_y
+                ],
+                agents=[
+                    agent.to_state_snapshot()
+                    for agent in self._world_state.agents
+                    if anchor_x <= agent.x < max_x and anchor_y <= agent.y < max_y
+                ],
+            )
+
+    async def get_recent_world_events(self, limit: int = 20) -> list[WorldEventSchema]:
+        """Return recent authoritative events as world-event DTOs."""
+
+        async with self._lock:
+            recent = self._recent_events[-limit:]
+            start_index = max(0, len(self._recent_events) - len(recent))
+            return [
+                self._serialize_world_event(event, start_index + index)
+                for index, event in enumerate(recent)
+            ]
+
+    async def seed_world(self, initial_agent_count: int | None = None) -> SimulationSnapshot:
+        """Reset the current runtime to a clean seeded baseline."""
+
+        async with self._lock:
+            self._reset_world_state(initial_agent_count or len(self._world_state.agents))
+            return self._world_state.to_snapshot()
+
+    async def get_agent_relationships(self, agent_id: str) -> RelationshipsResponse:
+        """Return a minimal relationship summary for an agent."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            if agent.partner_id is None:
+                return RelationshipsResponse(relationships=[])
+            return RelationshipsResponse(
+                relationships=[
+                    RelationshipSummary(
+                        related_agent_id=agent.partner_id,
+                        kind="partner",
+                        score=1.0,
+                    )
+                ]
+            )
+
+    async def get_agent_goals(self, agent_id: str) -> GoalsResponse:
+        """Return the current prototype goal state for an agent."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            return GoalsResponse(
+                goals=[GoalSummary(title=agent.current_goal, status="active")] if agent.current_goal else []
+            )
+
+    async def get_agent_timeline(self, agent_id: str) -> TimelineResponse:
+        """Return a simple merged memory and event timeline for an agent."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            entries = [
+                TimelineEntry(kind="memory", summary=memory, tick=None)
+                for memory in reversed(agent.memories[-10:])
+            ]
+            entries.extend(
+                TimelineEntry(kind="event", summary=event.type.value, tick=event.tick)
+                for event in reversed(self._recent_events[-20:])
+                if event.agent_id == agent_id
+            )
+            return TimelineResponse(entries=entries)
+
+    async def step_agent_once(self, agent_id: str) -> AgentStateSnapshot:
+        """Advance one authoritative tick and return the specified agent snapshot."""
+
+        async with self._lock:
+            self._require_agent(agent_id)
+            self._step_once_locked()
+            return self._require_agent(agent_id).to_state_snapshot()
+
+    async def force_reflect(self, agent_id: str) -> ForceReflectResponse:
+        """Force a slow-loop pass for an agent on the next authoritative tick."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            agent.slow_loop_trigger_flags.add("major_life_event")
+            self._step_once_locked()
+            result = next((item for item in self._slow_loop_service.last_results if item.agent_id == agent_id), None)
+            return ForceReflectResponse(
+                agent_id=agent_id,
+                applied=result.applied if result is not None else False,
+                planner_hints=list(result.planner_hints) if result is not None else [],
+                trigger_reasons=list(result.trigger_reasons) if result is not None else [],
+            )
+
+    async def get_memory_episodes(self, agent_id: str) -> EpisodesResponse:
+        """Return prototype episodic memories stored on the authoritative agent state."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            return EpisodesResponse(
+                episodes=[MemoryEpisodeSummary(text=memory, tick=None) for memory in reversed(agent.memories)]
+            )
+
+    async def get_memory_beliefs(self, agent_id: str) -> BeliefsResponse:
+        """Return prototype semantic beliefs stored on the authoritative agent state."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            return BeliefsResponse(beliefs=[BeliefSummary(text=belief) for belief in agent.beliefs])
+
+    async def retrieve_memories(self, agent_id: str, query: str, limit: int) -> MemoryRetrieveResponse:
+        """Perform simple substring retrieval against current agent memories."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            normalized = query.strip().lower()
+            matches = [
+                memory
+                for memory in reversed(agent.memories)
+                if not normalized or normalized in memory.lower()
+            ]
+            return MemoryRetrieveResponse(agent_id=agent_id, query=query, matches=matches[:limit])
+
+    async def summarize_memories(self, agent_id: str) -> MemorySummarizeResponse:
+        """Return a lightweight textual summary of recent memories."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            recent = agent.memories[-3:]
+            return MemorySummarizeResponse(
+                agent_id=agent_id,
+                summary=" | ".join(recent) if recent else "No memories available.",
+                memory_count=len(agent.memories),
+            )
+
+    async def get_debug_metrics(self) -> DebugMetricsResponse:
+        """Return compact runtime metrics for debugging."""
+
+        async with self._lock:
+            last_tick = self._telemetry.tick_history[-1] if self._telemetry.tick_history else None
+            return DebugMetricsResponse(
+                tick=self._world_state.tick,
+                sim_time=self._world_state.current_time.isoformat(),
+                total_recorded_ticks=len(self._telemetry.tick_history),
+                pending_scheduler_tasks=self._scheduler.pending_task_ids(),
+                last_tick_event_count=last_tick.event_count if last_tick is not None else 0,
+                last_tick_event_types=list(last_tick.event_types) if last_tick is not None else [],
+            )
+
+    async def get_replay_events(self, limit: int = 20) -> ReplayResponse:
+        """Return recent authoritative events for replay/debugging."""
+
+        async with self._lock:
+            recent = self._recent_events[-limit:]
+            start_index = max(0, len(self._recent_events) - len(recent))
+            return ReplayResponse(
+                events=[
+                    ReplayEventResponse(
+                        event_id=f"sim-{start_index + index}",
+                        tick=event.tick,
+                        event_type=event.type.value,
+                        agent_id=event.agent_id,
+                        sim_time=event.sim_time.isoformat(),
+                        payload=dict(event.payload),
+                    )
+                    for index, event in enumerate(recent)
+                ]
+            )
+
+    async def inspect_agent(self, agent_id: str) -> AgentInspectResponse:
+        """Return a compact debug inspection payload for one agent."""
+
+        async with self._lock:
+            agent = self._require_agent(agent_id)
+            return AgentInspectResponse(
+                agent=agent.to_state_snapshot(),
+                beliefs=list(agent.beliefs),
+                memories=list(agent.memories),
+                pending_planner_hints=list(agent.pending_planner_hints),
+                trigger_flags=sorted(agent.slow_loop_trigger_flags),
+            )
+
+    async def inspect_household(self, household_id: str) -> HouseholdInspectResponse:
+        """Return a minimal inspection payload for a prototype household."""
+
+        async with self._lock:
+            members = [
+                agent.to_state_snapshot()
+                for agent in self._world_state.agents
+                if agent.household_id == household_id
+            ]
+            if not members:
+                raise LookupError(f"Unknown household '{household_id}'.")
+            return HouseholdInspectResponse(household_id=household_id, agents=members)
+
+    async def spawn_agent(self, name: str | None, tile_x: int | None, tile_y: int | None) -> AgentStateSnapshot:
+        """Create a new prototype agent in the authoritative world."""
+
+        async with self._lock:
+            next_index = len(self._world_state.agents) + 1
+            agent = AgentState(
+                agent_id=f"agent-{next_index}",
+                name=name or f"Villager {next_index}",
+                x=tile_x if tile_x is not None else min(self._world_state.width - 1, next_index - 1),
+                y=tile_y if tile_y is not None else self._world_state.height // 2,
+            )
+            self._world_state.agents.append(agent)
+            return agent.to_state_snapshot()
+
+    async def spawn_food(self, tile_x: int, tile_y: int, quantity: int, item_type: str) -> SpawnFoodResponse:
+        """Increase prototype world resources at a specific location."""
+
+        async with self._lock:
+            self._world_state.resource_level += float(quantity)
+            return SpawnFoodResponse(
+                status="spawned",
+                item_type=item_type,
+                quantity=quantity,
+                tile_x=tile_x,
+                tile_y=tile_y,
+                resource_level=self._world_state.resource_level,
+            )
+
+    async def advance_days(self, days: int) -> AdvanceDaysResponse:
+        """Advance the simulation by coarse admin day units.
+
+        The prototype keeps admin advancement responsive by approximating one day as 24 ticks.
+        """
+
+        async with self._lock:
+            ticks_run = days * 24
+            for _ in range(ticks_run):
+                self._step_once_locked()
+            return AdvanceDaysResponse(
+                days_requested=days,
+                ticks_run=ticks_run,
+                final_tick=self._world_state.tick,
+                current_time=self._world_state.current_time.isoformat(),
+            )
+
+    async def reset_world(self) -> ResetWorldResponse:
+        """Reset the authoritative runtime to the initial baseline."""
+
+        async with self._lock:
+            self._reset_world_state(len(self._world_state.agents))
+            return ResetWorldResponse(
+                status="reset",
+                tick=self._world_state.tick,
+                agent_count=len(self._world_state.agents),
+            )
+
     async def emit_simulation_event(
         self,
         event_type: EventType,
@@ -228,7 +523,55 @@ class SimulationRuntime:
                 return agent
         return None
 
+    def _require_agent(self, agent_id: str) -> AgentState:
+        """Look up an agent by id and raise a consistent error when missing."""
+
+        agent = self._get_agent(agent_id)
+        if agent is None:
+            raise LookupError(f"Unknown agent '{agent_id}'.")
+        return agent
+
     def _step_once_locked(self) -> SimulationSnapshot:
         """Advance one tick while the caller holds the runtime lock."""
 
-        return self._world_loop.tick_once()
+        snapshot = self._world_loop.tick_once()
+        self._recent_events.extend(self._telemetry.last_flushed_events)
+        self._recent_events = self._recent_events[-200:]
+        return snapshot
+
+    def _reset_world_state(self, initial_agent_count: int) -> None:
+        """Rebuild the world, clock, scheduler, and telemetry to a clean baseline."""
+
+        self._world_state = build_initial_world_state(
+            width=self._world_state.width,
+            height=self._world_state.height,
+            initial_agent_count=initial_agent_count,
+        )
+        self._event_bus = EventBus()
+        self._scheduler = TaskScheduler()
+        self._telemetry = TelemetryRecorder()
+        self._recent_events = []
+        self._sim_clock = SimulationClock(
+            start_time=self._world_state.current_time,
+            tick_interval=timedelta(seconds=self._tick_interval_seconds),
+        )
+        self._world_loop = WorldLoop(
+            world_state=self._world_state,
+            sim_clock=self._sim_clock,
+            scheduler=self._scheduler,
+            agent_runtime=self._agent_runtime,
+            telemetry=self._telemetry,
+            event_bus=self._event_bus,
+        )
+
+    def _serialize_world_event(self, event: SimulationEvent, index: int) -> WorldEventSchema:
+        """Adapt a recent simulation event into the shared world-event DTO."""
+
+        return WorldEventSchema(
+            event_id=f"{event.tick}-{index}-{event.type.value}",
+            tick=event.tick,
+            event_type=event.type.value,
+            actor_ids=[event.agent_id] if event.agent_id is not None else [],
+            target_ids=[],
+            payload=dict(event.payload),
+        )

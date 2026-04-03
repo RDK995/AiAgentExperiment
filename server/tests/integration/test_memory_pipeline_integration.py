@@ -11,9 +11,16 @@ from sqlalchemy import create_engine, event as sqlalchemy_event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base, import_models
-from app.db.enums import AgentSex, StageOfLife
+from app.db.enums import AgentSex, GoalSource, GoalStatus, GoalType, StageOfLife
 from app.db.models import EpisodicMemory, MemoryEmbedding
-from app.db.repositories import AgentCreateParams, AgentRepository
+from app.db.repositories import (
+    AgentCreateParams,
+    AgentRepository,
+    EpisodicMemoryCreateParams,
+    GoalCreateParams,
+    MemoryRepository,
+    RelationshipCreateParams,
+)
 from app.engine.tick_loop import SimulationRuntime
 from app.engine.world_state import AgentState, TerrainType, TileState, WorldState, build_initial_world_state
 from app.memory.embeddings import DeterministicHashEmbeddingProvider
@@ -272,5 +279,329 @@ def test_runtime_day_rollover_expires_previous_day_summary_candidates() -> None:
         assert receiver.daily_summary_day_index == runtime._world_state.day_index
         assert receiver.daily_summary_candidates == []
         assert receiver_context.recent_events[-1] == "agent-1 gave me berries."
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_uses_retrieval_context_from_persistence() -> None:
+    """Live runtime reflection should prepare context via the retrieval pipeline when persistence is available."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        bootstrap = session_factory()
+        repository = AgentRepository(bootstrap)
+        actor = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="A",
+                sex=AgentSex.FEMALE,
+                birth_tick=0,
+                current_tile_x=1,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                biography_summary="A keeps a careful village journal.",
+            )
+        )
+        related = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="B",
+                sex=AgentSex.MALE,
+                birth_tick=0,
+                current_tile_x=2,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+            )
+        )
+        repository.create_goal(
+            GoalCreateParams(
+                agent_id=actor.id,
+                goal_type=GoalType.WEALTH,
+                title="Store grain before winter",
+                priority=2.5,
+                horizon_days=4,
+                status=GoalStatus.ACTIVE,
+                source=GoalSource.REFLECTION,
+                created_tick=10,
+                updated_tick=10,
+            )
+        )
+        repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=actor.id,
+                target_agent_id=related.id,
+                trust=0.8,
+                admiration=0.4,
+                familiarity=0.3,
+                last_interaction_tick=8,
+            )
+        )
+        bootstrap.commit()
+        bootstrap.close()
+
+        runtime = SimulationRuntime(
+            initial_state=WorldState(
+                width=4,
+                height=3,
+                day_index=100,
+                tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+                agents=[
+                    AgentState(agent_id="agent-1", name="A", x=1, y=1),
+                    AgentState(agent_id="agent-2", name="B", x=2, y=1),
+                ],
+            ),
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver=lambda agent_id: {
+                "agent-1": actor.id,
+                "agent-2": related.id,
+            }.get(agent_id),
+        )
+        workflow = SpyReflectionWorkflow()
+        runtime._slow_loop_service._reflection_workflow = workflow
+
+        await runtime.force_reflect("agent-1")
+
+        assert workflow.calls
+        context = workflow.calls[0]
+        assert context.autobiography == "A keeps a careful village journal."
+        assert context.goals == ["Store grain before winter"]
+        assert context.relationships == [str(related.id)]
+
+        engine.dispose()
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_caps_retrieved_memory_context_for_reflection() -> None:
+    """Live reflection preparation should keep retrieved memory context compact."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        bootstrap = session_factory()
+        agent_repository = AgentRepository(bootstrap)
+        memory_repository = MemoryRepository(bootstrap)
+        actor = agent_repository.create_agent_bundle(
+            AgentCreateParams(
+                name="A",
+                sex=AgentSex.FEMALE,
+                birth_tick=0,
+                current_tile_x=1,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                biography_summary="A keeps a careful village journal.",
+            )
+        )
+        for tick in range(1, 18):
+            memory_repository.create_memory(
+                EpisodicMemoryCreateParams(
+                    agent_id=actor.id,
+                    tick=tick,
+                    event_type="memory",
+                    raw_text=f"persistent-memory-{tick}",
+                    valence=0.0,
+                    salience=min(1.0, 0.3 + tick * 0.02),
+                )
+            )
+        bootstrap.commit()
+        bootstrap.close()
+
+        runtime = SimulationRuntime(
+            initial_state=WorldState(
+                width=4,
+                height=3,
+                day_index=100,
+                tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+                agents=[AgentState(agent_id="agent-1", name="A", x=1, y=1)],
+            ),
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver=lambda agent_id: actor.id if agent_id == "agent-1" else None,
+        )
+        workflow = SpyReflectionWorkflow()
+        runtime._slow_loop_service._reflection_workflow = workflow
+
+        await runtime.force_reflect("agent-1")
+
+        assert workflow.calls
+        context = workflow.calls[0]
+        assert len(context.recent_events) == 8
+        assert context.recent_events[0] == "persistent-memory-17"
+        assert context.recent_events[-1] == "persistent-memory-10"
+
+        engine.dispose()
+
+    asyncio.run(run_test())
+
+
+def test_runtime_prepare_dialogue_context_uses_shared_retrieval_pipeline() -> None:
+    """Speaking context should come from the same authoritative retrieval pipeline as reflection."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        bootstrap = session_factory()
+        agent_repository = AgentRepository(bootstrap)
+        memory_repository = MemoryRepository(bootstrap)
+        actor = agent_repository.create_agent_bundle(
+            AgentCreateParams(
+                name="A",
+                sex=AgentSex.FEMALE,
+                birth_tick=0,
+                current_tile_x=1,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                biography_summary="A keeps a careful village journal.",
+            )
+        )
+        related = agent_repository.create_agent_bundle(
+            AgentCreateParams(
+                name="B",
+                sex=AgentSex.MALE,
+                birth_tick=0,
+                current_tile_x=2,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+            )
+        )
+        agent_repository.create_goal(
+            GoalCreateParams(
+                agent_id=actor.id,
+                goal_type=GoalType.WEALTH,
+                title="Store grain before winter",
+                priority=3.0,
+                horizon_days=5,
+                status=GoalStatus.ACTIVE,
+                source=GoalSource.REFLECTION,
+                created_tick=10,
+                updated_tick=10,
+            )
+        )
+        agent_repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=actor.id,
+                target_agent_id=related.id,
+                trust=0.9,
+                admiration=0.6,
+                familiarity=0.8,
+                attraction=0.2,
+                obligation=0.4,
+                resentment=0.0,
+                fear=0.0,
+                dependency=0.1,
+                last_interaction_tick=21,
+            )
+        )
+        for tick in range(1, 5):
+            memory_repository.create_memory(
+                EpisodicMemoryCreateParams(
+                    agent_id=actor.id,
+                    tick=tick,
+                    event_type="memory",
+                    raw_text=f"persistent-memory-{tick}",
+                    valence=0.1,
+                    salience=min(1.0, 0.4 + tick * 0.1),
+                )
+            )
+        bootstrap.commit()
+        bootstrap.close()
+
+        runtime = SimulationRuntime(
+            initial_state=WorldState(
+                width=4,
+                height=3,
+                day_index=100,
+                tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+                agents=[AgentState(agent_id="agent-1", name="A", x=1, y=1)],
+            ),
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver=lambda agent_id: actor.id if agent_id == "agent-1" else None,
+        )
+
+        context = await runtime.prepare_dialogue_context("agent-1", "winter grain planning")
+
+        assert context.agent_id == "agent-1"
+        assert context.topic_text == "winter grain planning"
+        assert context.summary == "A keeps a careful village journal."
+        assert context.goals == ["Store grain before winter"]
+        assert context.relationships == [str(related.id)]
+        assert context.memories == [
+            "persistent-memory-4",
+            "persistent-memory-3",
+            "persistent-memory-2",
+            "persistent-memory-1",
+        ]
+        assert "topic=winter grain planning" in context.prompt
+        assert "Store grain before winter" in context.prompt
+        assert str(related.id) in context.prompt
+
+        engine.dispose()
 
     asyncio.run(run_test())

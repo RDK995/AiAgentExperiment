@@ -13,6 +13,7 @@ from app.engine.event_bus import EventBus
 from app.engine.sim_clock import SimTick
 from app.engine.world_state import AgentState, WorldState
 from app.memory.retriever import MemoryRetriever
+from app.memory.retrieval import RetrievalContextService
 from app.memory.writer import MemoryWriter
 from app.schemas.event import EventType, SimulationEvent
 from app.schemas.reflection import ReflectionContext
@@ -40,6 +41,7 @@ class SlowLoopService:
         goal_updater: GoalUpdater,
         belief_updater: BeliefUpdater,
         memory_writer: MemoryWriter,
+        retrieval_service: RetrievalContextService | None = None,
     ) -> None:
         self._memory_retriever = memory_retriever
         self._autobiography_builder = autobiography_builder
@@ -48,6 +50,7 @@ class SlowLoopService:
         self._goal_updater = goal_updater
         self._belief_updater = belief_updater
         self._memory_writer = memory_writer
+        self._retrieval_service = retrieval_service
         self.last_results: list[SlowLoopResult] = []
 
     def handle_post_fast_loop(
@@ -108,13 +111,27 @@ class SlowLoopService:
         event_bus: EventBus,
     ) -> SlowLoopResult:
         trigger_reasons = sorted(agent.slow_loop_trigger_flags)
-        recent_events = self._memory_retriever.retrieve_recent_events(agent)
-        autobiography = self._autobiography_builder.build(agent, recent_events)
+        if self._retrieval_service is not None:
+            retrieved_context = self._retrieval_service.retrieve_context(
+                agent,
+                query_text=self._build_query_text(agent, trigger_reasons),
+            )
+            recent_events = [memory.raw_text for memory in retrieved_context.memories]
+            autobiography = retrieved_context.summary
+            goals = [goal.title for goal in retrieved_context.goals]
+            relationships = [relationship.related_agent_id for relationship in retrieved_context.relationships]
+        else:
+            recent_events = self._memory_retriever.retrieve_recent_events(agent)
+            autobiography = self._autobiography_builder.build(agent, recent_events)
+            goals = []
+            relationships = []
         context = ReflectionContext(
             agent_id=agent.agent_id,
             trigger_reasons=trigger_reasons,
             autobiography=autobiography,
             recent_events=recent_events,
+            goals=goals,
+            relationships=relationships,
         )
         raw_result = self._reflection_workflow.run(agent, context)
         try:
@@ -150,3 +167,10 @@ class SlowLoopService:
             applied=True,
             planner_hints=list(validated_result.planner_hints),
         )
+
+    @staticmethod
+    def _build_query_text(agent: AgentState, trigger_reasons: list[str]) -> str:
+        """Build a compact deterministic retrieval query for reflection context."""
+
+        trigger_text = " ".join(trigger_reasons)
+        return " ".join(part for part in [agent.current_goal, agent.current_action, trigger_text] if part).strip()

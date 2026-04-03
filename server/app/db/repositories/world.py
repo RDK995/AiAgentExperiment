@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import uuid
+from collections.abc import Callable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Inventory, WorldEvent
-from app.schemas.event import WorldEventSchema
+from app.schemas.event import SimulationEvent, WorldEventSchema
 
 
 @dataclass(slots=True)
@@ -23,6 +24,9 @@ class WorldEventCreateParams:
     location_x: int | None = None
     location_y: int | None = None
     payload: dict[str, object] = field(default_factory=dict)
+
+
+AgentIdResolver = Callable[[str], uuid.UUID | None]
 
 
 class WorldRepository:
@@ -52,6 +56,24 @@ class WorldRepository:
         )
         return self.add_world_event(world_event)
 
+    def world_event_params_from_simulation_event(
+        self,
+        event: SimulationEvent,
+        *,
+        resolve_agent_id: AgentIdResolver | None = None,
+    ) -> WorldEventCreateParams:
+        """Translate an authoritative simulation event into persistence create params."""
+
+        return WorldEventCreateParams(
+            tick=event.tick,
+            event_type=event.type.value,
+            actor_ids=self._resolve_uuid_ids(event.actor_ids, resolve_agent_id),
+            target_ids=self._resolve_uuid_ids(event.target_ids, resolve_agent_id),
+            location_x=event.location_x,
+            location_y=event.location_y,
+            payload=dict(event.payload),
+        )
+
     def serialize_world_event(self, world_event: WorldEvent) -> WorldEventSchema:
         """Convert a persisted world event row into the API-safe DTO."""
 
@@ -63,6 +85,7 @@ class WorldRepository:
             target_ids=[str(target_id) for target_id in world_event.target_ids],
             location_x=world_event.location_x,
             location_y=world_event.location_y,
+            source_module=None,
             payload=world_event.payload,
         )
 
@@ -78,3 +101,23 @@ class WorldRepository:
         self._session.add(inventory)
         self._session.flush()
         return inventory
+
+    @staticmethod
+    def _resolve_uuid_ids(
+        ids: list[str],
+        resolver: AgentIdResolver | None,
+    ) -> list[uuid.UUID]:
+        """Resolve simulation agent identifiers into persistence UUID identifiers."""
+
+        resolved: list[uuid.UUID] = []
+        for agent_id in ids:
+            if resolver is not None:
+                mapped = resolver(agent_id)
+                if mapped is not None:
+                    resolved.append(mapped)
+                continue
+            try:
+                resolved.append(uuid.UUID(agent_id))
+            except (TypeError, ValueError):
+                continue
+        return resolved

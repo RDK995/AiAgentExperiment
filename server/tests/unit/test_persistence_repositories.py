@@ -31,7 +31,8 @@ from app.db.repositories import (
     WorldEventCreateParams,
     WorldRepository,
 )
-from app.schemas.event import WorldEventSchema
+from app.schemas.event import EventType, SimulationEvent, WorldEventSchema
+from datetime import datetime, timezone
 
 
 @pytest.fixture
@@ -451,7 +452,47 @@ def test_world_repository_serializes_location_targets_and_nested_payload(db_sess
         target_ids=[str(target_id)],
         location_x=4,
         location_y=5,
+        source_module=None,
         payload={"child": {"name": "Child 1"}, "household": {"id": "house-1"}},
+    )
+
+
+def test_world_repository_builds_create_params_from_simulation_event_with_resolver(
+    db_session: Session,
+) -> None:
+    """Simulation events should translate into persistence params through the existing repository shape."""
+
+    world_repository = WorldRepository(db_session)
+    actor_uuid = uuid.uuid4()
+    target_uuid = uuid.uuid4()
+    event = SimulationEvent(
+        type=EventType.PROPOSAL_ACCEPTED,
+        tick=88,
+        sim_time=datetime(2000, 1, 1, 9, 0, tzinfo=timezone.utc),
+        actor_ids=["agent-1"],
+        target_ids=["agent-2"],
+        location_x=7,
+        location_y=3,
+        source_module="social",
+        payload={"promise": "shared_home"},
+    )
+
+    params = world_repository.world_event_params_from_simulation_event(
+        event,
+        resolve_agent_id=lambda agent_id: {
+            "agent-1": actor_uuid,
+            "agent-2": target_uuid,
+        }.get(agent_id),
+    )
+
+    assert params == WorldEventCreateParams(
+        tick=88,
+        event_type="proposal_accepted",
+        actor_ids=[actor_uuid],
+        target_ids=[target_uuid],
+        location_x=7,
+        location_y=3,
+        payload={"promise": "shared_home"},
     )
 
 

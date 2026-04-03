@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import timedelta
+import uuid
+
+from sqlalchemy.orm import Session
 
 from app.agents.executor import ActionExecutor
 from app.agents.lifecycle import LifecycleService
@@ -19,6 +24,12 @@ from app.cognition.reflection_graph import AutobiographyBuilder
 from app.cognition.slow_loop import SlowLoopService
 from app.cognition.validation import ReflectionValidator
 from app.engine.event_bus import EventBus
+from app.engine.event_listeners import (
+    MemoryEventListener,
+    RelationshipEventListener,
+    ReplayEventLog,
+    WorldEventPersistenceListener,
+)
 from app.engine.rules.simulation_rules import is_action_legal
 from app.engine.scheduler import TaskScheduler
 from app.engine.sim_clock import SimulationClock
@@ -59,16 +70,26 @@ from app.telemetry.metrics import TelemetryRecorder
 class SimulationRuntime:
     """Owns the authoritative world state and advances it over time."""
 
-    def __init__(self, initial_state: WorldState, tick_interval_seconds: float) -> None:
+    def __init__(
+        self,
+        initial_state: WorldState,
+        tick_interval_seconds: float,
+        *,
+        world_event_session_scope: Callable[[], AbstractContextManager[Session]] | None = None,
+        persistent_agent_id_resolver: Callable[[str], uuid.UUID | None] | None = None,
+    ) -> None:
         self._world_state = initial_state
         self._tick_interval_seconds = tick_interval_seconds
+        self._world_event_session_scope = world_event_session_scope
+        self._persistent_agent_id_resolver = persistent_agent_id_resolver
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._running = False
-        self._event_bus = EventBus()
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
+        self._replay_log = ReplayEventLog(max_events=200)
         self._recent_events: list[SimulationEvent] = []
+        self._event_bus = self._build_event_bus()
         self._sim_clock = SimulationClock(
             start_time=initial_state.current_time,
             tick_interval=timedelta(seconds=tick_interval_seconds),
@@ -354,6 +375,9 @@ class SimulationRuntime:
                 pending_scheduler_tasks=self._scheduler.pending_task_ids(),
                 last_tick_event_count=last_tick.event_count if last_tick is not None else 0,
                 last_tick_event_types=list(last_tick.event_types) if last_tick is not None else [],
+                last_tick_event_type_counts=(
+                    dict(last_tick.event_type_counts) if last_tick is not None else {}
+                ),
             )
 
     async def get_replay_events(self, limit: int = 20) -> ReplayResponse:
@@ -471,6 +495,11 @@ class SimulationRuntime:
         event_type: EventType,
         agent_id: str | None = None,
         payload: dict[str, object] | None = None,
+        actor_ids: list[str] | None = None,
+        target_ids: list[str] | None = None,
+        location_x: int | None = None,
+        location_y: int | None = None,
+        source_module: str | None = None,
     ) -> None:
         """Enqueue an authoritative simulation event for the next world tick."""
 
@@ -481,6 +510,11 @@ class SimulationRuntime:
                     tick=self._world_state.tick,
                     sim_time=self._world_state.current_time,
                     agent_id=agent_id,
+                    actor_ids=list(actor_ids or []),
+                    target_ids=list(target_ids or []),
+                    location_x=location_x,
+                    location_y=location_y,
+                    source_module=source_module or "runtime",
                     payload=payload or {},
                 )
             )
@@ -526,6 +560,7 @@ class SimulationRuntime:
                         "stage_order": list(self._telemetry.tick_history[-1].stage_order),
                         "event_count": self._telemetry.tick_history[-1].event_count,
                         "event_types": list(self._telemetry.tick_history[-1].event_types),
+                        "event_type_counts": dict(self._telemetry.tick_history[-1].event_type_counts),
                     }
                     if self._telemetry.tick_history
                     else None
@@ -552,8 +587,9 @@ class SimulationRuntime:
         """Advance one tick while the caller holds the runtime lock."""
 
         snapshot = self._world_loop.tick_once()
-        self._recent_events.extend(self._telemetry.last_flushed_events)
-        self._recent_events = self._recent_events[-200:]
+        if self._telemetry.last_flushed_events:
+            self._replay_log.record(self._telemetry.last_flushed_events[-1])
+        self._recent_events = self._replay_log.recent_events(limit=200)
         return snapshot
 
     def _reset_world_state(self, initial_agent_count: int) -> None:
@@ -564,9 +600,10 @@ class SimulationRuntime:
             height=self._world_state.height,
             initial_agent_count=initial_agent_count,
         )
-        self._event_bus = EventBus()
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
+        self._replay_log = ReplayEventLog(max_events=200)
+        self._event_bus = self._build_event_bus()
         self._recent_events = []
         self._sim_clock = SimulationClock(
             start_time=self._world_state.current_time,
@@ -584,11 +621,26 @@ class SimulationRuntime:
     def _serialize_world_event(self, event: SimulationEvent, index: int) -> WorldEventSchema:
         """Adapt a recent simulation event into the shared world-event DTO."""
 
-        return WorldEventSchema(
-            event_id=f"{event.tick}-{index}-{event.type.value}",
-            tick=event.tick,
-            event_type=event.type.value,
-            actor_ids=[event.agent_id] if event.agent_id is not None else [],
-            target_ids=[],
-            payload=dict(event.payload),
+        return WorldEventSchema.from_simulation_event(
+            event,
+            fallback_event_id=f"{event.tick}-{index}-{event.type.value}",
         )
+
+    def _build_event_bus(self) -> EventBus:
+        """Create and subscribe the authoritative event bus for the current runtime state."""
+
+        event_bus = EventBus()
+        event_bus.subscribe_all(self._telemetry.observe_event)
+        event_bus.subscribe_all(self._replay_log.handle)
+        event_bus.subscribe_all(
+            MemoryEventListener(lambda: self._world_state, MemoryWriter()).handle
+        )
+        event_bus.subscribe_all(RelationshipEventListener(lambda: self._world_state).handle)
+        if self._world_event_session_scope is not None:
+            event_bus.subscribe_all(
+                WorldEventPersistenceListener(
+                    self._world_event_session_scope,
+                    resolve_agent_id=self._persistent_agent_id_resolver,
+                ).handle
+            )
+        return event_bus

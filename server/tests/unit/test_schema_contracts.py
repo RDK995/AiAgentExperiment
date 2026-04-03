@@ -12,7 +12,7 @@ from app.db.enums import GoalType, StageOfLife
 from app.cognition.output_parser import ReflectionOutputParser
 from app.engine.world_state import AgentState
 from app.schemas.agent import AgentStateSnapshot, MoodSchema, NeedsSchema
-from app.schemas.event import WorldEventSchema
+from app.schemas.event import EventType, SimulationEvent, WorldEventSchema
 from app.schemas.memory import WorldEventRecord
 from app.schemas.reflection import (
     BeliefUpdate,
@@ -355,6 +355,88 @@ def test_world_event_schema_from_record_integrates_with_persistence_record_schem
     assert event.actor_ids == [str(record.actor_ids[0])]
     assert event.target_ids == [str(record.target_ids[0])]
     assert event.payload == {"attendance": 20}
+
+
+def test_simulation_event_parses_valid_payload_and_backfills_actor_ids() -> None:
+    """Simulation events should accept valid payloads and derive actor_ids from legacy agent_id."""
+
+    event = SimulationEvent.model_validate(
+        {
+            "type": "gift_given",
+            "tick": 14,
+            "sim_time": "2000-01-01T08:00:00+00:00",
+            "agent_id": "agent-1",
+            "target_ids": ["agent-2"],
+            "location_x": 3,
+            "location_y": 4,
+            "source_module": "social",
+            "payload": {"item_type": "berries"},
+        }
+    )
+
+    assert event.type is EventType.GIFT_GIVEN
+    assert event.actor_ids == ["agent-1"]
+    assert event.target_ids == ["agent-2"]
+    assert event.payload == {"item_type": "berries"}
+
+
+def test_simulation_event_missing_required_fields_fail_validation() -> None:
+    """Simulation events should fail validation when required contract fields are missing."""
+
+    with pytest.raises(ValidationError):
+        SimulationEvent.model_validate(
+            {
+                "tick": 14,
+                "agent_id": "agent-1",
+                "payload": {},
+            }
+        )
+
+
+def test_simulation_event_rejects_invalid_payload_shape() -> None:
+    """Simulation events should reject malformed payload field types."""
+
+    with pytest.raises(ValidationError):
+        SimulationEvent.model_validate(
+            {
+                "type": "gift_given",
+                "tick": 14,
+                "sim_time": "2000-01-01T08:00:00+00:00",
+                "actor_ids": "agent-1",
+                "payload": [],
+            }
+        )
+
+
+def test_world_event_schema_from_simulation_event_preserves_rich_fields() -> None:
+    """Simulation events should project cleanly into the shared world-event transport schema."""
+
+    simulation_event = SimulationEvent(
+        event_id="evt-42",
+        type=EventType.PROPOSAL_ACCEPTED,
+        tick=42,
+        sim_time="2000-01-01T08:42:00+00:00",
+        actor_ids=["agent-1"],
+        target_ids=["agent-2"],
+        location_x=6,
+        location_y=2,
+        source_module="social",
+        payload={"ring": "woven_grass"},
+    )
+
+    event = WorldEventSchema.from_simulation_event(simulation_event)
+
+    assert event == WorldEventSchema(
+        event_id="evt-42",
+        tick=42,
+        event_type="proposal_accepted",
+        actor_ids=["agent-1"],
+        target_ids=["agent-2"],
+        location_x=6,
+        location_y=2,
+        source_module="social",
+        payload={"ring": "woven_grass"},
+    )
 
 
 def test_reflection_output_parses_valid_nested_payload() -> None:

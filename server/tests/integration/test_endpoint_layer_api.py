@@ -279,7 +279,13 @@ def test_debug_routes_return_metrics_and_inspection_payloads(client: TestClient)
     assert inspect_agent.status_code == 200
     assert inspect_household.status_code == 404
 
-    assert {"tick", "sim_time", "total_recorded_ticks", "last_tick_event_types"} <= set(metrics.json())
+    assert {
+        "tick",
+        "sim_time",
+        "total_recorded_ticks",
+        "last_tick_event_types",
+        "last_tick_event_type_counts",
+    } <= set(metrics.json())
     assert isinstance(replay.json()["events"], list)
     assert inspect_agent.json()["agent"]["agent_id"] == "agent-1"
     assert isinstance(DebugMetricsResponse.model_validate(metrics.json()), DebugMetricsResponse)

@@ -52,6 +52,7 @@ def test_lifecycle_fertility_and_birth_path_are_deterministic() -> None:
     events = service.update(world, tick=2, now=_now(), event_bus=bus)
 
     assert any(event.type is EventType.BIRTH for event in events)
+    assert any(event.type is EventType.CHILD_BORN for event in events)
     assert len(world.agents) == 2
     assert world.agents[1].stage_of_life is StageOfLife.INFANT
 
@@ -67,6 +68,7 @@ def test_lifecycle_death_marks_agent_and_emits_event() -> None:
     assert agent.alive is False
     assert agent.current_action == "dead"
     assert any(event.type is EventType.DEATH for event in events)
+    assert any(event.type is EventType.AGENT_DIED for event in events)
 
 
 def test_lifecycle_rejects_ineligible_pregnancy_start() -> None:
@@ -182,6 +184,35 @@ def test_birth_clears_pregnancy_state_and_inherits_household() -> None:
     assert parent.pregnancy_progress_ticks is None
     assert parent.pregnancy_partner_id is None
     assert child.household_id == "household-1"
+
+
+def test_start_pregnancy_can_emit_pregnancy_started_event() -> None:
+    """Pregnancy start should emit a domain event when invoked with runtime event context."""
+
+    agent = AgentState(
+        agent_id="agent-1",
+        name="Parent",
+        x=0,
+        y=0,
+        sex=AgentSex.FEMALE,
+        age_ticks=2_000,
+        stage_of_life=StageOfLife.ADULT,
+    )
+    bus = EventBus()
+
+    event = LifecycleService().start_pregnancy(
+        agent,
+        partner_id="agent-2",
+        tick=1,
+        now=_now(),
+        event_bus=bus,
+    )
+
+    assert event is not None
+    assert event.type is EventType.PREGNANCY_STARTED
+    assert event.actor_ids == ["agent-1"]
+    assert event.target_ids == ["agent-2"]
+    assert event.payload == {"partner_id": "agent-2"}
 
 
 def _make_world(agent: AgentState) -> WorldState:

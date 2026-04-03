@@ -133,6 +133,10 @@ class SlowLoopService:
                 tick=tick.tick,
                 sim_time=tick.at,
                 agent_id=agent.agent_id,
+                actor_ids=[agent.agent_id],
+                location_x=agent.x,
+                location_y=agent.y,
+                source_module="slow_loop",
                 payload={"planner_hints": list(validated_result.planner_hints)},
             )
         )

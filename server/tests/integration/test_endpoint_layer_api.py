@@ -99,12 +99,18 @@ def test_world_chunk_and_seed_invalid_inputs_fail_cleanly(client: TestClient) ->
     """World routes should reject invalid path and body inputs through the contract layer."""
 
     invalid_chunk = client.get("/api/v1/world/chunk/-1/0")
+    out_of_bounds_chunk = client.get("/api/v1/world/chunk/16/0")
     invalid_seed = client.post("/api/v1/world/seed", json={"agent_count": 0})
 
     assert invalid_chunk.status_code == 400
     assert invalid_chunk.json() == {
         "error": "bad_request",
         "message": "Chunk coordinates must be non-negative.",
+    }
+    assert out_of_bounds_chunk.status_code == 400
+    assert out_of_bounds_chunk.json() == {
+        "error": "bad_request",
+        "message": "Chunk coordinates must fall within world bounds.",
     }
     assert invalid_seed.status_code == 422
     assert invalid_seed.json()["detail"][0]["loc"] == ["body", "agent_count"]

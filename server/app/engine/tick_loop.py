@@ -190,6 +190,8 @@ class SimulationRuntime:
         """Return a deterministic square chunk anchored at a world tile."""
 
         async with self._lock:
+            if anchor_x >= self._world_state.width or anchor_y >= self._world_state.height:
+                raise ValueError("Chunk coordinates must fall within world bounds.")
             max_x = min(self._world_state.width, anchor_x + size)
             max_y = min(self._world_state.height, anchor_y + size)
             return ChunkResponse(

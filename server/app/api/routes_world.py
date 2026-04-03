@@ -99,7 +99,10 @@ async def get_world_chunk(
 
     if x < 0 or y < 0:
         raise bad_request("Chunk coordinates must be non-negative.")
-    return await runtime.get_world_chunk(x, y)
+    try:
+        return await runtime.get_world_chunk(x, y)
+    except ValueError as exc:
+        raise bad_request(str(exc)) from exc
 
 
 @router.get("/events/recent", response_model=RecentWorldEventsResponse)

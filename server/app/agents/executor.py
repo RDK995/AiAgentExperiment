@@ -170,6 +170,7 @@ class ActionExecutor:
                     {"task": task.task_type.value, "position": {"x": agent.x, "y": agent.y}},
                 )
             )
+            agent.plan_failure_count = 0
             return True
 
         if task.task_type is TaskType.DRINK:
@@ -229,6 +230,7 @@ class ActionExecutor:
         target_x = task.target_x if task.target_x is not None else agent.x
         target_y = task.target_y if task.target_y is not None else agent.y
         if agent.x == target_x and agent.y == target_y:
+            agent.plan_failure_count = 0
             events.append(
                 self._emit_event(
                     event_bus,
@@ -265,6 +267,7 @@ class ActionExecutor:
             )
         )
         if agent.x == target_x and agent.y == target_y:
+            agent.plan_failure_count = 0
             events.append(
                 self._emit_event(
                     event_bus,
@@ -289,6 +292,7 @@ class ActionExecutor:
     ) -> bool:
         """Emit a completion event for a non-movement task."""
 
+        agent.plan_failure_count = 0
         events.append(
             self._emit_event(
                 event_bus,

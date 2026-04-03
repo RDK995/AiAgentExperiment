@@ -240,6 +240,26 @@ def test_executor_fails_cleanly_when_selected_action_has_no_tasks() -> None:
     assert any(event.type is EventType.ACTION_EXECUTED for event in events)
 
 
+def test_executor_success_resets_stale_plan_failure_count() -> None:
+    """A successful task should clear accumulated failures instead of carrying them forward forever."""
+
+    world = _make_world()
+    agent = world.agents[0]
+    agent.plan_failure_count = 2
+
+    events = ActionExecutor().execute(
+        world,
+        agent,
+        SelectedAction(action_type=ActionType.REST, tasks=[PlannedTask(TaskType.REST)]),
+        tick=1,
+        now=datetime(2000, 1, 1, 8, 0, tzinfo=timezone.utc),
+        event_bus=EventBus(),
+    )
+
+    assert agent.plan_failure_count == 0
+    assert any(event.type is EventType.TASK_COMPLETED for event in events)
+
+
 def _make_world() -> WorldState:
     """Build a compact deterministic world for executor tests."""
 

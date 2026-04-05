@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.cognition.reflection import ReflectionWorkflow
 from app.db.base import Base, import_models
 from app.db.models import WorldEvent
+from app.db.repositories import AgentCreateParams, AgentRepository, GoalCreateParams, RelationshipCreateParams
+from app.db.enums import AgentSex, GoalSource, GoalStatus, GoalType, StageOfLife
 from app.engine.scheduler import ScheduledTask
 from app.engine.tick_loop import SimulationRuntime
 from app.engine.world_state import AgentState, ResourceNodeState, TerrainType, TileState, WorldState, build_initial_world_state
@@ -245,6 +247,118 @@ def test_runtime_force_reflect_surfaces_validation_failures_without_planner_hint
         assert reflection.validation_errors
         assert recent.reflections[-1].failure_stage == "validate"
         assert recent.reflections[-1].applied is False
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_accepts_persistent_relationship_ids_in_reflection_output() -> None:
+    """Persistence-backed relationship UUIDs should not cause reflection validation failure."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        bootstrap = session_factory()
+        repository = AgentRepository(bootstrap)
+        actor = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="A",
+                sex=AgentSex.FEMALE,
+                birth_tick=0,
+                current_tile_x=1,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                biography_summary="A keeps a careful village journal.",
+            )
+        )
+        related = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="B",
+                sex=AgentSex.MALE,
+                birth_tick=0,
+                current_tile_x=2,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+            )
+        )
+        repository.create_goal(
+            GoalCreateParams(
+                agent_id=actor.id,
+                goal_type=GoalType.WEALTH,
+                title="Store grain before winter",
+                priority=2.5,
+                horizon_days=4,
+                status=GoalStatus.ACTIVE,
+                source=GoalSource.REFLECTION,
+                created_tick=10,
+                updated_tick=10,
+            )
+        )
+        repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=actor.id,
+                target_agent_id=related.id,
+                trust=0.8,
+                admiration=0.4,
+                familiarity=0.3,
+                last_interaction_tick=8,
+            )
+        )
+        bootstrap.commit()
+        bootstrap.close()
+
+        runtime = SimulationRuntime(
+            initial_state=WorldState(
+                width=4,
+                height=3,
+                day_index=100,
+                tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+                agents=[
+                    AgentState(agent_id="agent-1", name="A", x=1, y=1),
+                    AgentState(agent_id="agent-2", name="B", x=2, y=1),
+                ],
+            ),
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver=lambda agent_id: {
+                "agent-1": actor.id,
+                "agent-2": related.id,
+            }.get(agent_id),
+        )
+
+        reflection = await runtime.force_reflect("agent-1")
+
+        assert reflection.applied is True
+        assert reflection.failure_stage is None
+        assert reflection.validation_errors == []
+        assert "keep_routine" in reflection.planner_hints
+        assert any(
+            belief == f"agent:{related.id}:is_part_of_my_support_network:yes"
+            for belief in runtime._world_state.agent_by_id("agent-1").beliefs
+        )
+
+        engine.dispose()
 
     asyncio.run(run_test())
 

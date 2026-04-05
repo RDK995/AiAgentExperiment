@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import uuid
 
 import pytest
 
@@ -485,6 +486,44 @@ def test_reflection_validator_accepts_valid_constrained_output() -> None:
             ],
             "memory_candidates": [{"text": "agent-2 helped me recover.", "salience": 0.7, "valence": 0.3}],
             "tomorrow_intentions": ["visit_partner"],
+        }
+    )
+
+    assert validator.validate_output(output, agent=agent, world=world) is output
+
+
+def test_reflection_validator_accepts_persistent_uuid_agent_subject_ids() -> None:
+    """Persistence-backed relationship ids should be accepted as valid agent belief subjects."""
+
+    validator = ReflectionValidator()
+    world = _world()
+    agent = world.agents[0]
+    persistent_related_id = str(uuid.uuid4())
+
+    output = ReflectionOutput.model_validate(
+        {
+            "summary": "good",
+            "mood_delta": {},
+            "belief_updates": [
+                {
+                    "subject_type": "agent",
+                    "subject_id": persistent_related_id,
+                    "predicate": "is_part_of_my_support_network",
+                    "object_value": "yes",
+                    "confidence_delta": 0.15,
+                }
+            ],
+            "goal_updates": [
+                {
+                    "action": "create",
+                    "goal_type": "safety",
+                    "title": "Recover before taking risks",
+                    "priority": 0.8,
+                    "horizon_days": 1,
+                }
+            ],
+            "memory_candidates": [{"text": "agent-2 helped me recover.", "salience": 0.7, "valence": 0.3}],
+            "tomorrow_intentions": ["keep_routine"],
         }
     )
 

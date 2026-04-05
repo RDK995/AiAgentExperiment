@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 from app.engine.world_state import AgentState, WorldState
 from app.schemas.reflection import ReflectionOutput, ReflectionResult
@@ -78,7 +79,12 @@ class ReflectionValidator:
         for update in output.belief_updates:
             if update.predicate in forbidden_kinship_predicates:
                 raise ReflectionValidationError("Reflection cannot mutate kinship facts.")
-            if update.subject_type == "agent" and update.subject_id is not None and update.subject_id not in known_agent_ids:
+            if (
+                update.subject_type == "agent"
+                and update.subject_id is not None
+                and update.subject_id not in known_agent_ids
+                and not _is_uuid_string(update.subject_id)
+            ):
                 raise ReflectionValidationError("Reflection referenced an unknown agent.")
             if update.subject_type == "item" and update.object_value not in known_item_types:
                 raise ReflectionValidationError("Reflection invented an unknown item.")
@@ -113,3 +119,11 @@ class ReflectionValidator:
                     raise ReflectionValidationError("avoid_agent hint referenced an unknown agent.")
                 continue
             raise ReflectionValidationError(f"Unsupported planner hint '{hint}'.")
+
+
+def _is_uuid_string(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True

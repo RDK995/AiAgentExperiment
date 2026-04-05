@@ -8,21 +8,41 @@ from app.db.enums import AgentSex, StageOfLife
 from app.engine.event_bus import EventBus
 from app.engine.world_state import AgentState, WorldState
 from app.schemas.event import EventType, SimulationEvent
+from app.social.bonding import BondingService
+from app.social.bonding import RelationshipMetrics
+from app.social.reproduction import ReproductionService
 
 
 class LifecycleService:
     """Advance aging, health, fertility, pregnancy, birth, and death state."""
 
-    def __init__(self, gestation_ticks: int = 3) -> None:
+    def __init__(
+        self,
+        gestation_ticks: int = 3,
+        reproduction_service: ReproductionService | None = None,
+        bonding_service: BondingService | None = None,
+    ) -> None:
         self._gestation_ticks = gestation_ticks
+        self._reproduction_service = reproduction_service
+        self._bonding_service = bonding_service
 
     def update(self, world: WorldState, tick: int, now: datetime, event_bus: EventBus) -> list[SimulationEvent]:
         """Advance lifecycle state for all living agents in the authoritative world."""
 
         events: list[SimulationEvent] = []
+        if self._bonding_service is not None:
+            events.extend(
+                self._bonding_service.evaluate_social_opportunities(
+                    world,
+                    tick=tick,
+                    now=now,
+                    event_bus=event_bus,
+                )
+            )
         for agent in list(world.agents):
             if not agent.alive:
                 continue
+            pregnancy_started_this_tick = False
             agent.age_ticks += 1
             previous_stage = agent.stage_of_life
             agent.stage_of_life = self._stage_for_age(agent.age_ticks)
@@ -41,35 +61,72 @@ class LifecycleService:
             if agent.hunger >= 95.0 or agent.thirst >= 95.0 or agent.fatigue >= 95.0:
                 agent.health = max(0.0, agent.health - 2.0)
 
-            if agent.pregnancy_progress_ticks is not None:
+            if (
+                self._reproduction_service is not None
+                and agent.pregnancy_progress_ticks is None
+                and agent.partner_id is not None
+            ):
+                partner = world.agent_by_id(agent.partner_id)
+                if partner is not None:
+                    conception = self._reproduction_service.try_conception(
+                        world,
+                        agent,
+                        partner,
+                        tick=tick,
+                        now=now,
+                        event_bus=event_bus,
+                        is_fertile=self.is_fertile,
+                        start_pregnancy=self.start_pregnancy,
+                        relationship=RelationshipMetrics(
+                            familiarity=1.0 if partner.partner_id == agent.agent_id else 0.6,
+                            trust=0.7,
+                            attraction=0.7,
+                            admiration=0.5,
+                        ),
+                    )
+                    if conception.event is not None:
+                        events.append(conception.event)
+                        pregnancy_started_this_tick = True
+
+            if agent.pregnancy_progress_ticks is not None and not pregnancy_started_this_tick:
                 agent.pregnancy_progress_ticks += 1
                 if agent.pregnancy_progress_ticks >= self._gestation_ticks:
-                    child = self._create_child(world, agent)
+                    father = world.agent_by_id(agent.pregnancy_partner_id) if agent.pregnancy_partner_id is not None else None
+                    if self._reproduction_service is not None:
+                        child, birth_events = self._reproduction_service.handle_birth(
+                            world,
+                            agent,
+                            father,
+                            tick=tick,
+                            now=now,
+                            event_bus=event_bus,
+                        )
+                    else:
+                        child = self._create_child(world, agent)
+                        birth_events = [
+                            self._emit(
+                                event_bus,
+                                EventType.BIRTH,
+                                tick,
+                                now,
+                                agent,
+                                {"child_id": child.agent_id},
+                                target_ids=[child.agent_id],
+                            ),
+                            self._emit(
+                                event_bus,
+                                EventType.CHILD_BORN,
+                                tick,
+                                now,
+                                agent,
+                                {"child_id": child.agent_id},
+                                target_ids=[child.agent_id],
+                            ),
+                        ]
                     world.agents.append(child)
                     agent.pregnancy_progress_ticks = None
                     agent.pregnancy_partner_id = None
-                    events.append(
-                        self._emit(
-                            event_bus,
-                            EventType.BIRTH,
-                            tick,
-                            now,
-                            agent,
-                            {"child_id": child.agent_id},
-                            target_ids=[child.agent_id],
-                        )
-                    )
-                    events.append(
-                        self._emit(
-                            event_bus,
-                            EventType.CHILD_BORN,
-                            tick,
-                            now,
-                            agent,
-                            {"child_id": child.agent_id},
-                            target_ids=[child.agent_id],
-                        )
-                    )
+                    events.extend(birth_events)
 
             if agent.health <= 0.0:
                 agent.alive = False
@@ -163,6 +220,8 @@ class LifecycleService:
             age_ticks=0,
             household_id=parent.household_id,
             partner_id=None,
+            parent_ids=[parent.agent_id],
+            family_orientation=parent.family_orientation,
         )
 
     @staticmethod

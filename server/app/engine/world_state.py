@@ -78,18 +78,22 @@ class AgentState:
     alive: bool = True
     household_id: str | None = None
     partner_id: str | None = None
+    parent_ids: list[str] = field(default_factory=list)
     current_action: str = "idle"
     current_goal: str = "Maintain daily routine"
     mood: str = "steady"
     plan_failure_count: int = 0
     slow_loop_trigger_flags: set[str] = field(default_factory=set)
     pending_planner_hints: list[str] = field(default_factory=list)
+    family_orientation: float = 0.5
+    bond_rejection_until_tick: int | None = None
     beliefs: list[str] = field(default_factory=list)
     memories: list[str] = field(default_factory=list)
     daily_summary_day_index: int | None = None
     daily_summary_candidates: list[MemoryCandidate] = field(default_factory=list)
     is_threat: bool = False
     has_infant_care_duty: bool = False
+    household_planning_pressure: float = 0.0
     pregnancy_progress_ticks: int | None = None
     pregnancy_partner_id: str | None = None
     current_task_payload: dict[str, Any] | None = None

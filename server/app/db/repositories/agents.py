@@ -8,8 +8,17 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.db.enums import AgentSex, GoalSource, GoalStatus, GoalType, KinshipType, StageOfLife
-from app.db.models import Agent, AgentGoal, AgentNeed, AgentSkill, AgentTrait, Relationship
+from app.db.enums import (
+    AgentSex,
+    GoalSource,
+    GoalStatus,
+    GoalType,
+    KinshipType,
+    PairBondState,
+    PregnancyStatus,
+    StageOfLife,
+)
+from app.db.models import Agent, AgentGoal, AgentNeed, AgentSkill, AgentTrait, PairBond, Pregnancy, Relationship
 
 
 @dataclass(slots=True)
@@ -22,6 +31,7 @@ class AgentCreateParams:
     current_tile_x: int
     current_tile_y: int
     stage_of_life: StageOfLife
+    household_id: uuid.UUID | None = None
     biography_summary: str = ""
     trait_values: dict[str, float] = field(default_factory=dict)
     need_values: dict[str, float] = field(default_factory=dict)
@@ -78,6 +88,29 @@ class GoalUpdateParams:
     updated_tick: int | None = None
 
 
+@dataclass(slots=True)
+class PairBondCreateParams:
+    """Parameters for creating or updating a pair-bond record."""
+
+    agent_a_id: uuid.UUID
+    agent_b_id: uuid.UUID
+    state: PairBondState
+    bond_strength: float
+    started_tick: int
+    ended_tick: int | None = None
+
+
+@dataclass(slots=True)
+class PregnancyCreateParams:
+    """Parameters for creating a pregnancy record."""
+
+    mother_id: uuid.UUID
+    father_id: uuid.UUID | None
+    started_tick: int
+    expected_birth_tick: int
+    status: PregnancyStatus = PregnancyStatus.ACTIVE
+
+
 class AgentRepository:
     """Persistence helper for agent graphs."""
 
@@ -91,6 +124,7 @@ class AgentRepository:
             name=params.name,
             sex=params.sex,
             birth_tick=params.birth_tick,
+            household_id=params.household_id,
             current_tile_x=params.current_tile_x,
             current_tile_y=params.current_tile_y,
             stage_of_life=params.stage_of_life,
@@ -183,6 +217,69 @@ class AgentRepository:
             last_interaction_tick=params.last_interaction_tick,
         )
         return self.add_relationship(relationship)
+
+    def add_pair_bond(self, pair_bond: PairBond) -> PairBond:
+        """Persist a pair-bond record."""
+
+        self._session.add(pair_bond)
+        self._session.flush()
+        return pair_bond
+
+    def get_pair_bond_between(self, agent_a_id: uuid.UUID, agent_b_id: uuid.UUID) -> PairBond | None:
+        """Fetch a pair bond regardless of agent ordering."""
+
+        statement = select(PairBond).where(
+            (
+                (PairBond.agent_a_id == agent_a_id)
+                & (PairBond.agent_b_id == agent_b_id)
+            )
+            | (
+                (PairBond.agent_a_id == agent_b_id)
+                & (PairBond.agent_b_id == agent_a_id)
+            )
+        )
+        return self._session.scalar(statement)
+
+    def create_pair_bond(self, params: PairBondCreateParams) -> PairBond:
+        """Create and persist a pair-bond record."""
+
+        pair_bond = PairBond(
+            agent_a_id=params.agent_a_id,
+            agent_b_id=params.agent_b_id,
+            state=params.state,
+            bond_strength=params.bond_strength,
+            started_tick=params.started_tick,
+            ended_tick=params.ended_tick,
+        )
+        return self.add_pair_bond(pair_bond)
+
+    def add_pregnancy(self, pregnancy: Pregnancy) -> Pregnancy:
+        """Persist a pregnancy record."""
+
+        self._session.add(pregnancy)
+        self._session.flush()
+        return pregnancy
+
+    def get_active_pregnancy(self, mother_id: uuid.UUID) -> Pregnancy | None:
+        """Fetch the current active pregnancy for a mother, if one exists."""
+
+        statement = select(Pregnancy).where(
+            Pregnancy.mother_id == mother_id,
+            Pregnancy.status == PregnancyStatus.ACTIVE,
+        )
+        return self._session.scalar(statement)
+
+    def create_pregnancy(self, params: PregnancyCreateParams) -> Pregnancy:
+        """Create and persist a pregnancy record."""
+
+        pregnancy = Pregnancy(
+            mother_id=params.mother_id,
+            father_id=params.father_id,
+            started_tick=params.started_tick,
+            expected_birth_tick=params.expected_birth_tick,
+            status=params.status,
+        )
+        return self.add_pregnancy(pregnancy)
 
     def get_relationship(self, source_agent_id: uuid.UUID, target_agent_id: uuid.UUID) -> Relationship | None:
         """Fetch a relationship by its directed source and target agent IDs."""

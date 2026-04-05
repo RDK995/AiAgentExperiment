@@ -5,6 +5,8 @@ from app.db.repositories.agents import (
     AgentRepository,
     GoalCreateParams,
     GoalUpdateParams,
+    PairBondCreateParams,
+    PregnancyCreateParams,
     RelationshipCreateParams,
 )
 from app.db.repositories.memory import (
@@ -21,6 +23,8 @@ __all__ = [
     "GoalCreateParams",
     "GoalUpdateParams",
     "MemoryRepository",
+    "PairBondCreateParams",
+    "PregnancyCreateParams",
     "RelationshipCreateParams",
     "SemanticBeliefCreateParams",
     "WorldEventCreateParams",

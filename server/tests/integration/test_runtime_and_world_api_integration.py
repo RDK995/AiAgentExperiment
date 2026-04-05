@@ -155,6 +155,329 @@ def test_runtime_repeated_goal_failures_trigger_reflection_after_three_failures(
     asyncio.run(run_test())
 
 
+def test_runtime_bonded_pair_progresses_from_conception_to_birth_through_lifecycle() -> None:
+    """Bonded adult partners should conceive and produce a child through the normal runtime tick path."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=4,
+            height=4,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(4) for x in range(4)],
+            agents=[
+                AgentState(
+                    agent_id="agent-1",
+                    name="Ari",
+                    x=1,
+                    y=1,
+                    sex=AgentSex.FEMALE,
+                    partner_id="agent-2",
+                    household_id="household-1",
+                    family_orientation=0.6,
+                ),
+                AgentState(
+                    agent_id="agent-2",
+                    name="Bea",
+                    x=2,
+                    y=1,
+                    sex=AgentSex.MALE,
+                    partner_id="agent-1",
+                    household_id="household-1",
+                    family_orientation=0.7,
+                ),
+            ],
+            day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+        runtime._agent_runtime._lifecycle_service._reproduction_service._random_fn = lambda: 0.0
+
+        await runtime.step_once()
+        await runtime.step_once()
+        await runtime.step_once()
+
+        event_types = [event.type for event in runtime._recent_events]
+        child = runtime._world_state.agents[-1]
+
+        assert EventType.PREGNANCY_STARTED in event_types
+        assert EventType.CHILD_BORN in event_types
+        assert len(runtime._world_state.agents) == 3
+        assert child.stage_of_life is StageOfLife.INFANT
+        assert child.parent_ids == ["agent-1", "agent-2"]
+        assert child.household_id == "household-1"
+        assert runtime._world_state.agents[0].has_infant_care_duty is True
+        assert runtime._world_state.agents[1].has_infant_care_duty is True
+
+    asyncio.run(run_test())
+
+
+def test_runtime_social_window_can_progress_from_bond_attempt_to_birth_with_persistence() -> None:
+    """Unbonded nearby adults with strong persisted relationships should bond, conceive, and give birth via runtime ticks."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        bootstrap = session_factory()
+        repository = AgentRepository(bootstrap)
+        persistent_a = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="Ari",
+                sex=AgentSex.FEMALE,
+                birth_tick=0,
+                current_tile_x=1,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                household_id=None,
+                trait_values={"family_orientation": 0.7},
+            )
+        )
+        persistent_b = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="Bea",
+                sex=AgentSex.MALE,
+                birth_tick=0,
+                current_tile_x=2,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                household_id=persistent_a.id,
+                trait_values={"family_orientation": 0.65},
+            )
+        )
+        persistent_a.household_id = persistent_a.id
+        repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=persistent_a.id,
+                target_agent_id=persistent_b.id,
+                familiarity=0.82,
+                trust=0.84,
+                attraction=0.91,
+                admiration=0.55,
+                last_interaction_tick=6,
+            )
+        )
+        repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=persistent_b.id,
+                target_agent_id=persistent_a.id,
+                familiarity=0.8,
+                trust=0.8,
+                attraction=0.88,
+                admiration=0.5,
+                last_interaction_tick=6,
+            )
+        )
+        bootstrap.commit()
+        bootstrap.close()
+
+        world = WorldState(
+            width=4,
+            height=4,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(4) for x in range(4)],
+            agents=[
+                AgentState(
+                    agent_id="agent-1",
+                    name="Ari",
+                    x=1,
+                    y=1,
+                    sex=AgentSex.FEMALE,
+                    household_id="household-1",
+                    family_orientation=0.7,
+                ),
+                AgentState(
+                    agent_id="agent-2",
+                    name="Bea",
+                    x=2,
+                    y=1,
+                    sex=AgentSex.MALE,
+                    household_id="household-1",
+                    family_orientation=0.65,
+                ),
+            ],
+            day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        )
+        runtime = SimulationRuntime(
+            initial_state=world,
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver={"agent-1": persistent_a.id, "agent-2": persistent_b.id}.get,
+        )
+        runtime._agent_runtime._lifecycle_service._reproduction_service._random_fn = lambda: 0.0
+
+        await runtime.step_once()
+        await runtime.step_once()
+        await runtime.step_once()
+
+        event_types = [event.type for event in runtime._recent_events]
+        child = runtime._world_state.agents[-1]
+
+        with session_scope() as session:
+            repository = AgentRepository(session)
+            pair_bond = repository.get_pair_bond_between(persistent_a.id, persistent_b.id)
+
+        assert EventType.PROPOSAL_MADE in event_types
+        assert EventType.PROPOSAL_ACCEPTED in event_types
+        assert EventType.PREGNANCY_STARTED in event_types
+        assert EventType.CHILD_BORN in event_types
+        assert runtime._world_state.agents[0].partner_id == "agent-2"
+        assert runtime._world_state.agents[1].partner_id == "agent-1"
+        assert child.stage_of_life is StageOfLife.INFANT
+        assert child.parent_ids == ["agent-1", "agent-2"]
+        assert pair_bond is not None
+
+        engine.dispose()
+
+    asyncio.run(run_test())
+
+
+def test_runtime_does_not_emit_repeat_proposals_after_pair_is_already_bonded() -> None:
+    """Once a pair is bonded, later ticks should not emit repeated proposal events for that same pair."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        bootstrap = session_factory()
+        repository = AgentRepository(bootstrap)
+        persistent_a = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="Ari",
+                sex=AgentSex.FEMALE,
+                birth_tick=0,
+                current_tile_x=1,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                trait_values={"family_orientation": 0.7},
+            )
+        )
+        persistent_b = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="Bea",
+                sex=AgentSex.MALE,
+                birth_tick=0,
+                current_tile_x=2,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                household_id=persistent_a.id,
+                trait_values={"family_orientation": 0.65},
+            )
+        )
+        persistent_a.household_id = persistent_a.id
+        repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=persistent_a.id,
+                target_agent_id=persistent_b.id,
+                familiarity=0.82,
+                trust=0.84,
+                attraction=0.91,
+                admiration=0.55,
+                last_interaction_tick=6,
+            )
+        )
+        repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=persistent_b.id,
+                target_agent_id=persistent_a.id,
+                familiarity=0.8,
+                trust=0.8,
+                attraction=0.88,
+                admiration=0.5,
+                last_interaction_tick=6,
+            )
+        )
+        bootstrap.commit()
+        bootstrap.close()
+
+        world = WorldState(
+            width=4,
+            height=4,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(4) for x in range(4)],
+            agents=[
+                AgentState(
+                    agent_id="agent-1",
+                    name="Ari",
+                    x=1,
+                    y=1,
+                    sex=AgentSex.FEMALE,
+                    household_id="household-1",
+                    family_orientation=0.7,
+                ),
+                AgentState(
+                    agent_id="agent-2",
+                    name="Bea",
+                    x=2,
+                    y=1,
+                    sex=AgentSex.MALE,
+                    household_id="household-1",
+                    family_orientation=0.65,
+                ),
+            ],
+            day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        )
+        runtime = SimulationRuntime(
+            initial_state=world,
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver={"agent-1": persistent_a.id, "agent-2": persistent_b.id}.get,
+        )
+        runtime._agent_runtime._lifecycle_service._reproduction_service._random_fn = lambda: 1.0
+
+        await runtime.step_once()
+        await runtime.step_once()
+        await runtime.step_once()
+
+        event_types = [event.type for event in runtime._recent_events]
+
+        assert event_types.count(EventType.PROPOSAL_MADE) == 1
+        assert event_types.count(EventType.PROPOSAL_ACCEPTED) == 1
+        assert runtime._world_state.agents[0].partner_id == "agent-2"
+        assert runtime._world_state.agents[1].partner_id == "agent-1"
+
+        engine.dispose()
+
+    asyncio.run(run_test())
+
+
 def test_runtime_agent_detail_services_return_typed_snapshots() -> None:
     """The runtime service should return rich typed agent snapshot DTOs, not raw dicts."""
 

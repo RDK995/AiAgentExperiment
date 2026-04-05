@@ -40,6 +40,8 @@ from app.memory.retriever import MemoryRetriever
 from app.memory.pipeline import MemoryPipelineListener
 from app.memory.retrieval import RetrievalContextService
 from app.memory.writer import MemoryWriter
+from app.social.bonding import BondingService
+from app.social.reproduction import ReproductionService
 from app.schemas.api import (
     AdvanceDaysResponse,
     AgentInspectResponse,
@@ -90,6 +92,7 @@ class SimulationRuntime:
         self._tick_interval_seconds = tick_interval_seconds
         self._world_event_session_scope = world_event_session_scope
         self._persistent_agent_id_resolver = persistent_agent_id_resolver
+        self._runtime_agent_id_cache: dict[str, uuid.UUID] = {}
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._running = False
@@ -105,8 +108,18 @@ class SimulationRuntime:
             memory_retriever=self._memory_retriever,
             autobiography_builder=autobiography_builder,
             session_scope=self._world_event_session_scope,
-            persistent_agent_id_resolver=self._persistent_agent_id_resolver,
+            persistent_agent_id_resolver=self._resolve_persistent_agent_id,
             embedding_provider=self._memory_embedding_provider,
+        )
+        reproduction_service = ReproductionService(
+            gestation_ticks=3,
+            session_scope=self._world_event_session_scope,
+            resolve_agent_id=self._resolve_persistent_agent_id,
+            register_agent_id=self._register_persistent_agent_id,
+        )
+        bonding_service = BondingService(
+            session_factory=self._world_event_session_scope,
+            resolve_agent_id=self._resolve_persistent_agent_id,
         )
         self._dialogue_service = DialoguePreparationService(self._retrieval_service)
         self._event_bus = self._build_event_bus()
@@ -131,7 +144,10 @@ class SimulationRuntime:
             planner=ActionPlanner(),
             executor=ActionExecutor(),
             slow_loop_service=self._slow_loop_service,
-            lifecycle_service=LifecycleService(),
+            lifecycle_service=LifecycleService(
+                reproduction_service=reproduction_service,
+                bonding_service=bonding_service,
+            ),
         )
         self._world_loop = WorldLoop(
             world_state=self._world_state,
@@ -719,7 +735,7 @@ class SimulationRuntime:
                 lambda: self._world_state,
                 memory_writer=MemoryWriter(),
                 session_scope=self._world_event_session_scope,
-                resolve_agent_id=self._persistent_agent_id_resolver,
+                resolve_agent_id=self._resolve_persistent_agent_id,
                 embedding_provider=self._memory_embedding_provider,
             ).handle
         )
@@ -728,7 +744,25 @@ class SimulationRuntime:
             event_bus.subscribe_all(
                 WorldEventPersistenceListener(
                     self._world_event_session_scope,
-                    resolve_agent_id=self._persistent_agent_id_resolver,
+                    resolve_agent_id=self._resolve_persistent_agent_id,
                 ).handle
             )
         return event_bus
+
+    def _resolve_persistent_agent_id(self, agent_id: str) -> uuid.UUID | None:
+        """Resolve one runtime agent id to a persistent UUID, caching known mappings."""
+
+        cached = self._runtime_agent_id_cache.get(agent_id)
+        if cached is not None:
+            return cached
+        if self._persistent_agent_id_resolver is None:
+            return None
+        resolved = self._persistent_agent_id_resolver(agent_id)
+        if resolved is not None:
+            self._runtime_agent_id_cache[agent_id] = resolved
+        return resolved
+
+    def _register_persistent_agent_id(self, agent_id: str, persistent_id: uuid.UUID) -> None:
+        """Register a new runtime->persistent agent mapping, used for newborn children."""
+
+        self._runtime_agent_id_cache[agent_id] = persistent_id

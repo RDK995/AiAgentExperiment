@@ -104,6 +104,7 @@ class SimulationRuntime:
         self._recent_reflections = []
         self._memory_retriever = MemoryRetriever()
         self._memory_embedding_provider = memory_embedding_provider
+        self._current_seed_id: str | None = None
         autobiography_builder = AutobiographyBuilder()
         self._retrieval_service = RetrievalContextService(
             memory_retriever=self._memory_retriever,
@@ -298,6 +299,11 @@ class SimulationRuntime:
         async with self._lock:
             self._reset_world_state(initial_agent_count or len(self._world_state.agents), seed_id=seed_id)
             return self._world_state.to_snapshot()
+
+    def get_current_seed_id(self) -> str | None:
+        """Return the currently active deterministic seed id when the runtime is seed-backed."""
+
+        return self._current_seed_id
 
     async def get_agent_relationships(self, agent_id: str) -> RelationshipsResponse:
         """Return a minimal relationship summary for an agent."""
@@ -699,12 +705,14 @@ class SimulationRuntime:
 
         if seed_id is not None:
             self._world_state = WorldSeedService().build_world_state(seed_id)
+            self._current_seed_id = seed_id
         else:
             self._world_state = build_initial_world_state(
                 width=self._world_state.width,
                 height=self._world_state.height,
                 initial_agent_count=initial_agent_count,
             )
+            self._current_seed_id = None
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
         self._replay_log = ReplayEventLog(max_events=200)

@@ -27,6 +27,7 @@ func apply_seed_definition(seed_definition: Dictionary) -> void:
 
 func apply_snapshot(snapshot: Dictionary) -> void:
 	_snapshot = snapshot.duplicate(true)
+	_maybe_clear_stale_seed_definition()
 	_reconcile_agents()
 	if heatmap_overlay.has_method("set_snapshot"):
 		heatmap_overlay.call("set_snapshot", _snapshot)
@@ -150,10 +151,34 @@ func _agent_at_point(point: Vector2) -> String:
 
 
 func _get_world_data() -> Dictionary:
+	var snapshot_world: Variant = _snapshot.get("world", {})
+	if typeof(snapshot_world) == TYPE_DICTIONARY:
+		return snapshot_world
 	if _seed_definition.has("world"):
 		return _seed_definition.get("world", {})
-	var snapshot_world: Variant = _snapshot.get("world", {})
-	return snapshot_world if typeof(snapshot_world) == TYPE_DICTIONARY else {}
+	return {}
+
+
+func _maybe_clear_stale_seed_definition() -> void:
+	if not _seed_definition.has("world"):
+		return
+
+	var seed_world_value: Variant = _seed_definition.get("world", {})
+	var snapshot_world_value: Variant = _snapshot.get("world", {})
+	if typeof(seed_world_value) != TYPE_DICTIONARY or typeof(snapshot_world_value) != TYPE_DICTIONARY:
+		return
+
+	var seed_world: Dictionary = seed_world_value
+	var snapshot_world: Dictionary = snapshot_world_value
+	var seed_width := int(seed_world.get("width", 0))
+	var seed_height := int(seed_world.get("height", 0))
+	var snapshot_width := int(snapshot_world.get("width", 0))
+	var snapshot_height := int(snapshot_world.get("height", 0))
+	if seed_width == snapshot_width and seed_height == snapshot_height:
+		return
+
+	_seed_definition = {}
+	_reconcile_buildings()
 
 
 func _get_seed_structures() -> Array:

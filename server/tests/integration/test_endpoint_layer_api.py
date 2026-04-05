@@ -140,6 +140,50 @@ def test_world_stream_websocket_reflects_live_tick_updates(client: TestClient) -
     assert next_batch.snapshot_batch.snapshot.tick >= initial_tick + 1
 
 
+def test_world_stream_does_not_reseed_backend_by_default(client: TestClient) -> None:
+    """Connecting the presentation stream should not reset authoritative state unless explicitly requested."""
+
+    client.post("/api/v1/world/tick")
+    client.post("/api/v1/world/tick")
+    before = client.get("/api/v1/world/snapshot").json()
+
+    with client.websocket_connect("/api/v1/world/stream") as websocket:
+        first_message = WorldStreamEnvelope.model_validate(websocket.receive_json())
+        second_message = WorldStreamEnvelope.model_validate(websocket.receive_json())
+
+    after = client.get("/api/v1/world/snapshot").json()
+
+    assert first_message.message_type == "warning"
+    assert first_message.warning == "No fixed world seed is active on the backend; streaming snapshot-only state."
+    assert second_message.message_type == "snapshot_batch"
+    assert second_message.snapshot_batch is not None
+    assert second_message.snapshot_batch.snapshot.tick == before["tick"]
+    assert before["tick"] == after["tick"]
+    assert before["world"] == after["world"]
+    assert before["agents"] == after["agents"]
+
+
+def test_world_stream_emits_new_seed_definition_after_runtime_reseed(client: TestClient) -> None:
+    """A connected client should receive an updated seed definition when the backend activates a fixed seed."""
+
+    with client.websocket_connect("/api/v1/world/stream?poll_seconds=0.05") as websocket:
+        warning_message = WorldStreamEnvelope.model_validate(websocket.receive_json())
+        initial_batch = WorldStreamEnvelope.model_validate(websocket.receive_json())
+
+        client.post("/api/v1/world/seed", json={"seed_id": "v1_village"})
+        seed_message = WorldStreamEnvelope.model_validate(websocket.receive_json())
+        next_batch = WorldStreamEnvelope.model_validate(websocket.receive_json())
+
+    assert warning_message.message_type == "warning"
+    assert initial_batch.message_type == "snapshot_batch"
+    assert seed_message.message_type == "seed_definition"
+    assert seed_message.seed_definition is not None
+    assert seed_message.seed_definition.seed_id == "v1_village"
+    assert next_batch.message_type == "snapshot_batch"
+    assert next_batch.snapshot_batch is not None
+    assert next_batch.snapshot_batch.snapshot.world.width == 64
+
+
 def test_world_chunk_and_seed_invalid_inputs_fail_cleanly(client: TestClient) -> None:
     """World routes should reject invalid path and body inputs through the contract layer."""
 

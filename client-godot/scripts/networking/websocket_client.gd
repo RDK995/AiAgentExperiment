@@ -7,7 +7,7 @@ signal transport_status_changed(mode: String, detail: String)
 
 @export var base_url: String = "http://127.0.0.1:8000"
 @export var seed_id: String = "v1_village"
-@export var seed_on_startup: bool = true
+@export var seed_on_startup: bool = false
 @export var prefer_live_stream: bool = true
 @export var stream_path: String = "/api/v1/world/stream"
 @export var seed_definition_path: String = "/api/v1/world/seeds/%s"
@@ -16,12 +16,14 @@ signal transport_status_changed(mode: String, detail: String)
 @export var recent_events_path: String = "/api/v1/world/events/recent?limit=20"
 @export var poll_interval_seconds: float = 1.0
 @export var stream_poll_seconds: float = 0.25
+@export var reconnect_interval_seconds: float = 3.0
 
 var _seed_request: HTTPRequest
 var _seed_world_request: HTTPRequest
 var _snapshot_request: HTTPRequest
 var _events_request: HTTPRequest
 var _poll_timer: Timer
+var _reconnect_timer: Timer
 var _pending_snapshot: Dictionary = {}
 var _websocket := WebSocketPeer.new()
 var _transport_mode: String = "idle"
@@ -41,6 +43,12 @@ func _ready() -> void:
 	_poll_timer.timeout.connect(fetch_batch)
 	add_child(_poll_timer)
 
+	_reconnect_timer = Timer.new()
+	_reconnect_timer.wait_time = reconnect_interval_seconds
+	_reconnect_timer.autostart = false
+	_reconnect_timer.timeout.connect(_attempt_live_reconnect)
+	add_child(_reconnect_timer)
+
 	if prefer_live_stream:
 		_start_websocket_stream()
 	else:
@@ -56,6 +64,9 @@ func _process(_delta: float) -> void:
 	if state == WebSocketPeer.STATE_OPEN:
 		if not _websocket_open_announced:
 			_websocket_open_announced = true
+			_fallback_active = false
+			_poll_timer.stop()
+			_reconnect_timer.stop()
 			transport_status_changed.emit("websocket", "Connected to live backend stream.")
 		while _websocket.get_available_packet_count() > 0:
 			var packet := _websocket.get_packet().get_string_from_utf8()
@@ -73,6 +84,8 @@ func fetch_batch() -> void:
 func _start_websocket_stream() -> void:
 	_transport_mode = "websocket"
 	_websocket_open_announced = false
+	_websocket = WebSocketPeer.new()
+	_poll_timer.stop()
 	var connect_error := _websocket.connect_to_url(_build_stream_url())
 	if connect_error != OK:
 		_start_http_fallback("Failed to open live backend stream, using HTTP snapshot polling.")
@@ -85,12 +98,23 @@ func _start_http_fallback(message: String) -> void:
 	_transport_mode = "http"
 	transport_warning.emit(message)
 	transport_status_changed.emit("http", "Using HTTP snapshot polling.")
+	if prefer_live_stream and _reconnect_timer.is_stopped():
+		_reconnect_timer.start()
 	_fetch_seed_definition()
 	if seed_on_startup:
 		_request_seed_world()
 	else:
 		_poll_timer.start()
 		fetch_batch()
+
+
+func _attempt_live_reconnect() -> void:
+	if not prefer_live_stream or not _fallback_active:
+		return
+	if _transport_mode != "http":
+		return
+	transport_status_changed.emit("connecting", "Retrying live backend stream...")
+	_start_websocket_stream()
 
 
 func _handle_websocket_packet(packet: String) -> void:

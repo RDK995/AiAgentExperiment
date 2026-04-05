@@ -130,7 +130,7 @@ async def stream_world_events(websocket: WebSocket) -> None:
 
     app_state = websocket.app.state
     runtime: SimulationRuntime = app_state.simulation_runtime
-    seed_id = websocket.query_params.get("seed_id", "v1_village")
+    requested_seed_id = websocket.query_params.get("seed_id")
     seed_on_connect = websocket.query_params.get("seed_on_connect", "false").lower() == "true"
     poll_seconds_raw = websocket.query_params.get("poll_seconds", "0.25")
 
@@ -140,9 +140,8 @@ async def stream_world_events(websocket: WebSocket) -> None:
         poll_seconds = 0.25
 
     try:
-        if seed_on_connect:
-            await runtime.seed_world(seed_id=seed_id)
-        seed_definition = WorldSeedService().load_seed_definition(seed_id)
+        if seed_on_connect and requested_seed_id is not None:
+            await runtime.seed_world(seed_id=requested_seed_id)
     except ValueError as exc:
         await websocket.send_json(
             WorldStreamEnvelope(
@@ -153,15 +152,25 @@ async def stream_world_events(websocket: WebSocket) -> None:
         await websocket.close(code=1008, reason=str(exc))
         return
 
-    await websocket.send_json(
-        WorldStreamEnvelope(
-            message_type="seed_definition",
-            seed_definition=seed_definition,
-        ).model_dump(mode="json")
-    )
+    current_seed_id = runtime.get_current_seed_id()
+    if current_seed_id is not None:
+        await websocket.send_json(
+            WorldStreamEnvelope(
+                message_type="seed_definition",
+                seed_definition=WorldSeedService().load_seed_definition(current_seed_id),
+            ).model_dump(mode="json")
+        )
+    else:
+        await websocket.send_json(
+            WorldStreamEnvelope(
+                message_type="warning",
+                warning="No fixed world seed is active on the backend; streaming snapshot-only state.",
+            ).model_dump(mode="json")
+        )
 
     last_tick = -1
     last_event_id = ""
+    last_seed_id = current_seed_id
 
     try:
         while True:
@@ -169,6 +178,16 @@ async def stream_world_events(websocket: WebSocket) -> None:
                 await asyncio.wait_for(websocket.receive_text(), timeout=poll_seconds)
             except asyncio.TimeoutError:
                 pass
+
+            current_seed_id = runtime.get_current_seed_id()
+            if current_seed_id != last_seed_id and current_seed_id is not None:
+                await websocket.send_json(
+                    WorldStreamEnvelope(
+                        message_type="seed_definition",
+                        seed_definition=WorldSeedService().load_seed_definition(current_seed_id),
+                    ).model_dump(mode="json")
+                )
+                last_seed_id = current_seed_id
 
             snapshot = await runtime.get_snapshot()
             events = await runtime.get_recent_world_events(limit=20)

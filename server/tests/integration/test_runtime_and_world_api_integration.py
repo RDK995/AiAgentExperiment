@@ -408,6 +408,65 @@ def test_runtime_force_reflect_accepts_existing_fast_loop_hints_from_valid_outpu
     asyncio.run(run_test())
 
 
+def test_runtime_force_reflect_normalizes_high_level_planner_intentions() -> None:
+    """High-level reflection intentions should be normalized before they reach authoritative agent state."""
+
+    class HighLevelHintLLMClient:
+        def generate(self, prompt: str, **_: object) -> str:
+            del prompt
+            return ReflectionOutput(
+                summary="Invest in relationships and food security.",
+                mood_delta={"morale": 0.5},
+                belief_updates=[
+                    {
+                        "subject_type": "agent",
+                        "subject_id": "agent-1",
+                        "predicate": "can_improve_outcomes_by_adapting_routines",
+                        "object_value": "yes",
+                        "confidence_delta": 0.1,
+                    }
+                ],
+                goal_updates=[
+                    {
+                        "action": "create",
+                        "goal_type": "family",
+                        "title": "Protect my household",
+                        "priority": 0.8,
+                        "horizon_days": 1,
+                    }
+                ],
+                memory_candidates=[{"text": "I should prepare carefully.", "salience": 0.7, "valence": 0.1}],
+                tomorrow_intentions=[
+                    "spend_more_time_with_partner",
+                    "avoid_bea_when_possible",
+                    "prioritize_food_security",
+                ],
+            ).model_dump_json()
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+        runtime._world_state.agents[1].name = "Bea"
+        runtime._world_state.agents[0].partner_id = "agent-2"
+        runtime._world_state.resources.append(ResourceNodeState(resource_type="berries", x=1, y=0, quantity=2))
+        runtime._slow_loop_service._reflection_workflow = ReflectionWorkflow(llm_client=HighLevelHintLLMClient())
+
+        reflection = await runtime.force_reflect("agent-1")
+
+        assert reflection.applied is True
+        assert reflection.planner_hints == [
+            "visit_partner",
+            "avoid_agent_agent-2",
+            "prioritize_food_security",
+        ]
+        assert runtime._world_state.agent_by_id("agent-1").pending_planner_hints == [
+            "visit_partner",
+            "avoid_agent_agent-2",
+            "prioritize_food_security",
+        ]
+
+    asyncio.run(run_test())
+
+
 def test_runtime_spawn_food_creates_authoritative_item_stack() -> None:
     """Admin food spawning should populate authoritative world items for the engine modules."""
 

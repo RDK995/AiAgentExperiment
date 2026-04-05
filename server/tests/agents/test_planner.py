@@ -126,3 +126,151 @@ def test_choose_action_marks_interrupt_when_best_action_changes() -> None:
 
     assert selected.interrupted_previous_action is True
     assert selected.action_type.value == "drink"
+
+
+def test_partner_visit_hint_biases_social_plans_and_targets_partner() -> None:
+    """Partner-oriented hints should bias action choice and annotate the legal social task."""
+
+    agent = AgentState(
+        agent_id="agent-1",
+        name="A",
+        x=0,
+        y=0,
+        partner_id="agent-2",
+        pending_planner_hints=["visit_partner"],
+    )
+    selected = ActionPlanner().choose_action(
+        agent,
+        candidates=[
+            ActionCandidate(action_type=ActionType.WANDER, score=15.0),
+            ActionCandidate(action_type=ActionType.SOCIALIZE, score=15.0),
+        ],
+        perception=PerceptionResult(visible_agents=["agent-2"], visible_partner=True),
+    )
+
+    assert selected.action_type.value == "socialize"
+    assert selected.tasks[0].task_type.value == "socialize"
+    assert selected.tasks[0].metadata["target_agent_id"] == "agent-2"
+    assert "visit_partner" in selected.tasks[0].metadata["planner_hints"]
+
+
+def test_avoid_agent_hint_penalizes_social_plans_when_target_is_visible() -> None:
+    """Avoidance hints should steer tied plans away from social contact with the avoided agent."""
+
+    agent = AgentState(
+        agent_id="agent-1",
+        name="A",
+        x=0,
+        y=0,
+        pending_planner_hints=["avoid_agent_agent-2"],
+    )
+    selected = ActionPlanner().choose_action(
+        agent,
+        candidates=[
+            ActionCandidate(action_type=ActionType.SOCIALIZE, score=18.0),
+            ActionCandidate(action_type=ActionType.WANDER, score=18.0),
+        ],
+        perception=PerceptionResult(visible_agents=["agent-2"]),
+    )
+
+    assert selected.action_type.value == "wander"
+    assert "avoid_agent_agent-2" in selected.tasks[0].metadata["planner_hints"]
+    assert selected.tasks[0].metadata["avoid_agent_ids"] == ["agent-2"]
+
+
+def test_prepare_for_winter_hint_biases_work_toward_resource_security() -> None:
+    """Seasonal preparation hints should favor legal field/resource work over idle exploration."""
+
+    agent = AgentState(
+        agent_id="agent-1",
+        name="A",
+        x=0,
+        y=0,
+        pending_planner_hints=["prepare_for_winter"],
+    )
+    selected = ActionPlanner().choose_action(
+        agent,
+        candidates=[
+            ActionCandidate(action_type=ActionType.WANDER, score=15.0),
+            ActionCandidate(action_type=ActionType.WORK_FIELD, score=15.0),
+        ],
+        perception=PerceptionResult(sim_hour=10),
+    )
+
+    assert selected.action_type.value == "work_field"
+    assert "prepare_for_winter" in selected.tasks[0].metadata["planner_hints"]
+
+
+def test_prioritize_food_security_biases_tied_plans_toward_legal_food_security_action() -> None:
+    """Food-security hints should prefer a legal food-oriented plan when options are otherwise tied."""
+
+    agent = AgentState(
+        agent_id="agent-1",
+        name="A",
+        x=0,
+        y=0,
+        pending_planner_hints=["prioritize_food_security"],
+    )
+    selected = ActionPlanner().choose_action(
+        agent,
+        candidates=[
+            ActionCandidate(action_type=ActionType.WANDER, score=15.0),
+            ActionCandidate(action_type=ActionType.GATHER_FOOD, score=15.0),
+        ],
+        perception=PerceptionResult(nearest_food_x=2, nearest_food_y=1, nearby_food=True),
+    )
+
+    assert selected.action_type.value == "gather_food"
+    assert [task.task_type.value for task in selected.tasks] == ["move_to", "gather_food", "eat"]
+    assert selected.tasks[0].metadata["label"] == "food"
+    assert "prioritize_food_security" in selected.tasks[0].metadata["planner_hints"]
+
+
+def test_focus_on_recovery_biases_tied_plans_toward_legal_rest_without_bypassing_legality() -> None:
+    """Recovery hints should prefer legal rest behavior and not synthesize movement commands."""
+
+    agent = AgentState(
+        agent_id="agent-1",
+        name="A",
+        x=0,
+        y=0,
+        pending_planner_hints=["focus_on_recovery"],
+    )
+    selected = ActionPlanner().choose_action(
+        agent,
+        candidates=[
+            ActionCandidate(action_type=ActionType.WANDER, score=15.0),
+            ActionCandidate(action_type=ActionType.REST, score=15.0),
+        ],
+        perception=PerceptionResult(),
+    )
+
+    assert selected.action_type.value == "rest"
+    assert [task.task_type.value for task in selected.tasks] == ["rest"]
+    assert selected.tasks[0].metadata["planner_hints"] == ["focus_on_recovery"]
+    assert selected.tasks[0].target_x is None
+    assert selected.tasks[0].target_y is None
+
+
+def test_stay_close_to_home_biases_tied_plans_toward_local_rest_plan() -> None:
+    """Home-oriented hints should favor simple local plans over wandering when scores are tied."""
+
+    agent = AgentState(
+        agent_id="agent-1",
+        name="A",
+        x=0,
+        y=0,
+        pending_planner_hints=["stay_close_to_home"],
+    )
+    selected = ActionPlanner().choose_action(
+        agent,
+        candidates=[
+            ActionCandidate(action_type=ActionType.WANDER, score=15.0),
+            ActionCandidate(action_type=ActionType.REST, score=15.0),
+        ],
+        perception=PerceptionResult(),
+    )
+
+    assert selected.action_type.value == "rest"
+    assert [task.task_type.value for task in selected.tasks] == ["rest"]
+    assert selected.tasks[0].metadata["planner_hints"] == ["stay_close_to_home"]

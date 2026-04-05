@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.agents.planner_hints import normalize_planner_hints
 from app.cognition.llm_client import ReflectionLLMClient
 from app.cognition.output_parser import ReflectionOutputParser, ReflectionParseError
 from app.cognition.prompt_builder import ReflectionPromptBuilder
@@ -81,15 +82,24 @@ class ReflectionWorkflow:
                 execution.completed_stages.extend(["build_prompt", "call_model", "parse_json"])
                 validated_result = validator.validate(self.run(agent, context))
                 execution.completed_stages.append("validate")
+                try:
+                    normalized_hints = normalize_planner_hints(validated_result.planner_hints, agent=agent, world=world)
+                except ValueError as exc:
+                    raise ReflectionValidationError(str(exc)) from exc
                 goal_updater.apply(agent, validated_result.goals)
                 belief_updater.apply(agent, validated_result.beliefs)
                 memory_writer.write(agent, validated_result.memory_entries)
                 execution.completed_stages.append("persist_updates")
-                agent.pending_planner_hints = list(validated_result.planner_hints)
+                agent.pending_planner_hints = list(normalized_hints)
                 execution.completed_stages.append("emit_planner_hints")
                 execution.success = True
-                execution.result = validated_result
-                execution.planner_hints = list(validated_result.planner_hints)
+                execution.result = ReflectionResult(
+                    goals=list(validated_result.goals),
+                    beliefs=list(validated_result.beliefs),
+                    memory_entries=list(validated_result.memory_entries),
+                    planner_hints=list(normalized_hints),
+                )
+                execution.planner_hints = list(normalized_hints)
                 return execution
 
             current_stage = "build_prompt"

@@ -10,6 +10,7 @@ from app.agents.lifecycle import LifecycleService
 from app.agents.needs import NeedService
 from app.agents.perception import PerceptionResult, PerceptionService
 from app.agents.planner import ActionPlanner
+from app.agents.planner_hints import consume_planner_hints_for_action
 from app.agents.utility_ai import UtilityAI
 from app.cognition.slow_loop import SlowLoopService
 from app.engine.event_bus import EventBus
@@ -115,7 +116,7 @@ class AgentRuntime:
         selected_action = self._planner.choose_action(agent, candidates, context)
         trace.selected_action = selected_action.action_type.value
         trace.planned_tasks = [task.task_type.value for task in selected_action.tasks]
-        self._consume_planner_hints(agent, selected_action.action_type.value)
+        self._consume_planner_hints(agent, selected_action.action_type.value, context)
         trace.planner_hints_after = list(agent.pending_planner_hints)
 
         trace.stage_order.append("execute")
@@ -130,24 +131,18 @@ class AgentRuntime:
         return events
 
     @staticmethod
-    def _consume_planner_hints(agent: AgentState, selected_action: str) -> None:
+    def _consume_planner_hints(
+        agent: AgentState,
+        selected_action: str,
+        perception: PerceptionResult | None = None,
+    ) -> None:
         """Consume planner hints once they influence the chosen fast-loop action."""
 
-        action_to_hints = {
-            "eat": ["eat_soon", "focus_on_recovery", "prioritize_food_security"],
-            "drink": ["drink_soon", "focus_on_recovery"],
-            "rest": ["rest_soon", "focus_on_recovery"],
-            "gather_food": ["prioritize_food_security", "gather_resources"],
-            "fetch_water": ["gather_resources", "focus_on_recovery"],
-            "work_field": ["gather_resources", "prioritize_food_security"],
-            "socialize": ["visit_partner"],
-            "court": ["visit_partner"],
-            "wander": ["reflect_on_failures"],
-        }
-        for matched_hint in action_to_hints.get(selected_action, []):
-            if matched_hint in agent.pending_planner_hints:
-                agent.pending_planner_hints.remove(matched_hint)
-                break
+        agent.pending_planner_hints = consume_planner_hints_for_action(
+            agent.pending_planner_hints,
+            selected_action=selected_action,
+            perception=perception,
+        )
 
     @staticmethod
     def _summarize_perception(context: PerceptionResult) -> dict[str, Any]:

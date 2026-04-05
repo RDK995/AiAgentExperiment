@@ -347,6 +347,27 @@ def test_recovery_and_food_security_hints_are_consumed_after_guiding_actions(sim
     assert trace.planner_hints_after == ["prioritize_food_security"]
 
 
+def test_stay_close_to_home_hint_is_consumed_after_guiding_rest(simple_world: WorldState) -> None:
+    """Home-oriented hints should bias safe local actions and then expire after use."""
+
+    simple_world.agents[0].pending_planner_hints = ["stay_close_to_home"]
+    simple_world.agents[0].fatigue = 80.0
+    runtime, _, _, _ = _build_runtime_components(simple_world)
+    tick = SimTick(
+        tick=1,
+        at=datetime(2000, 1, 1, 6, 1, tzinfo=timezone.utc),
+        previous_day_index=1,
+        day_index=1,
+    )
+
+    runtime.step_all(simple_world, tick, EventBus())
+
+    trace = runtime.last_step_traces[0]
+    assert trace.selected_action == "rest"
+    assert trace.planner_hints_before == ["stay_close_to_home"]
+    assert trace.planner_hints_after == []
+
+
 def test_fast_loop_trace_records_perception_candidates_plans_and_events(simple_world: WorldState) -> None:
     """Fast-loop traces should expose the full perception-to-execution chain."""
 

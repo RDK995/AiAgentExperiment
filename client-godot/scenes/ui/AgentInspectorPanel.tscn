@@ -1,0 +1,28 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/agent_inspector.gd" id="1_inspector"]
+
+[node name="AgentInspectorPanel" type="PanelContainer"]
+custom_minimum_size = Vector2(240, 220)
+script = ExtResource("1_inspector")
+
+[node name="Margin" type="MarginContainer" parent="."]
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="Margin"]
+
+[node name="Title" type="Label" parent="Margin/VBox"]
+text = "Agent Inspector"
+
+[node name="Summary" type="Label" parent="Margin/VBox"]
+autowrap_mode = 3
+text = "Select an agent in the world."
+
+[node name="Needs" type="Label" parent="Margin/VBox"]
+autowrap_mode = 3
+
+[node name="Social" type="Label" parent="Margin/VBox"]
+autowrap_mode = 3

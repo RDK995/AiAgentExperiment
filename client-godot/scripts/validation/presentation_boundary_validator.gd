@@ -12,6 +12,8 @@ const ALLOWED_WORLD_KEYS := [
 	"width",
 	"height",
 	"tiles",
+	"structures",
+	"markers",
 ]
 const ALLOWED_AGENT_KEYS := [
 	"agent_id",
@@ -19,6 +21,10 @@ const ALLOWED_AGENT_KEYS := [
 	"position",
 	"needs",
 	"current_action",
+	"stage_of_life",
+	"household_id",
+	"partner_id",
+	"current_goal",
 ]
 const FORBIDDEN_SNAPSHOT_KEYS := [
 	"inventories",
@@ -103,5 +109,78 @@ static func validate_snapshot(snapshot: Dictionary) -> PackedStringArray:
 			var position_value: Variant = agent.get("position", {})
 			if typeof(position_value) != TYPE_DICTIONARY:
 				errors.append("Agent entry %d is missing a valid 'position'." % index)
+
+	return errors
+
+
+static func validate_seed_definition(seed_definition: Dictionary) -> PackedStringArray:
+	var errors := PackedStringArray()
+	var allowed_seed_keys := ["seed_id", "world", "agents", "households", "social_links"]
+
+	for key in seed_definition.keys():
+		var key_string := str(key)
+		if not key_string in allowed_seed_keys:
+			errors.append("Seed definition contains unsupported field '%s'." % key_string)
+
+	var world_value: Variant = seed_definition.get("world", {})
+	if typeof(world_value) != TYPE_DICTIONARY:
+		errors.append("Seed definition is missing a valid 'world' block.")
+	else:
+		var world: Dictionary = world_value
+		if typeof(world.get("tiles", [])) != TYPE_ARRAY:
+			errors.append("Seed world must provide 'tiles' as an array.")
+		if typeof(world.get("structures", [])) != TYPE_ARRAY:
+			errors.append("Seed world must provide 'structures' as an array.")
+		if typeof(world.get("markers", [])) != TYPE_ARRAY:
+			errors.append("Seed world must provide 'markers' as an array.")
+
+	var agents_value: Variant = seed_definition.get("agents", [])
+	if typeof(agents_value) != TYPE_ARRAY:
+		errors.append("Seed definition 'agents' must be an array.")
+
+	var households_value: Variant = seed_definition.get("households", [])
+	if typeof(households_value) != TYPE_ARRAY:
+		errors.append("Seed definition 'households' must be an array.")
+
+	var social_links_value: Variant = seed_definition.get("social_links", [])
+	if typeof(social_links_value) != TYPE_ARRAY:
+		errors.append("Seed definition 'social_links' must be an array.")
+
+	return errors
+
+
+static func validate_stream_envelope(envelope: Dictionary) -> PackedStringArray:
+	var errors := PackedStringArray()
+	var message_type := str(envelope.get("message_type", ""))
+	if message_type.is_empty():
+		errors.append("Stream envelope is missing 'message_type'.")
+		return errors
+
+	match message_type:
+		"seed_definition":
+			var seed_definition_value: Variant = envelope.get("seed_definition", {})
+			if typeof(seed_definition_value) != TYPE_DICTIONARY:
+				errors.append("Seed-definition envelope must provide 'seed_definition'.")
+			else:
+				errors.append_array(validate_seed_definition(seed_definition_value))
+		"snapshot_batch":
+			var batch_value: Variant = envelope.get("snapshot_batch", {})
+			if typeof(batch_value) != TYPE_DICTIONARY:
+				errors.append("Snapshot-batch envelope must provide 'snapshot_batch'.")
+			else:
+				var batch: Dictionary = batch_value
+				var snapshot_value: Variant = batch.get("snapshot", {})
+				var events_value: Variant = batch.get("events", [])
+				if typeof(snapshot_value) != TYPE_DICTIONARY:
+					errors.append("Snapshot batch must include a valid 'snapshot'.")
+				else:
+					errors.append_array(validate_snapshot(snapshot_value))
+				if typeof(events_value) != TYPE_ARRAY:
+					errors.append("Snapshot batch must include 'events' as an array.")
+		"warning":
+			if str(envelope.get("warning", "")).is_empty():
+				errors.append("Warning envelope must provide 'warning'.")
+		_:
+			errors.append("Unsupported stream envelope type '%s'." % message_type)
 
 	return errors

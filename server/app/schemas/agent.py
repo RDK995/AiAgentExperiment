@@ -53,13 +53,17 @@ class MoodSchema(BaseModel):
 class AgentSnapshot(BaseModel):
     """Serialized view of an agent sent to clients."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
 
     agent_id: str
     name: str
     position: GridPosition
     needs: AgentNeedState
     current_action: str
+    stage_of_life: StageOfLife | None = None
+    household_id: str | None = None
+    partner_id: str | None = None
+    current_goal: str | None = None
 
 
 class AgentStateSnapshot(BaseModel):

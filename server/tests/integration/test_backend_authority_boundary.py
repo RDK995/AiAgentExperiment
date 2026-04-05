@@ -65,6 +65,10 @@ def test_snapshot_schema_is_only_client_facing_state_contract(client: TestClient
             "position",
             "needs",
             "current_action",
+            "stage_of_life",
+            "household_id",
+            "partner_id",
+            "current_goal",
         }
         assert "inventory" not in agent
         assert "memory" not in agent

@@ -1,0 +1,18 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/world/world_renderer.gd" id="1_world"]
+[ext_resource type="Script" path="res://scripts/ui/heatmap_overlay.gd" id="2_heatmap"]
+
+[node name="WorldRoot" type="Node2D"]
+script = ExtResource("1_world")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+zoom = Vector2(0.6, 0.6)
+position = Vector2(768, 768)
+
+[node name="BuildingsLayer" type="Node2D" parent="."]
+
+[node name="AgentsLayer" type="Node2D" parent="."]
+
+[node name="HeatmapOverlay" type="Node2D" parent="."]
+script = ExtResource("2_heatmap")

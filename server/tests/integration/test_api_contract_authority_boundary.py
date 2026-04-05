@@ -36,7 +36,17 @@ def test_snapshot_contract_exposes_only_client_facing_state(client: TestClient) 
     assert "cognition" not in payload
 
     for agent in payload["agents"]:
-        assert set(agent.keys()) == {"agent_id", "name", "position", "needs", "current_action"}
+        assert set(agent.keys()) == {
+            "agent_id",
+            "name",
+            "position",
+            "needs",
+            "current_action",
+            "stage_of_life",
+            "household_id",
+            "partner_id",
+            "current_goal",
+        }
         assert "inventory" not in agent
         assert "memories" not in agent
         assert "beliefs" not in agent

@@ -1,0 +1,21 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/village_dashboard.gd" id="1_dashboard"]
+
+[node name="VillageDashboard" type="PanelContainer"]
+custom_minimum_size = Vector2(240, 180)
+script = ExtResource("1_dashboard")
+
+[node name="Margin" type="MarginContainer" parent="."]
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="Margin"]
+
+[node name="Title" type="Label" parent="Margin/VBox"]
+text = "Village Dashboard"
+
+[node name="Stats" type="Label" parent="Margin/VBox"]
+autowrap_mode = 3

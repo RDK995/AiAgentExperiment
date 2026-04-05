@@ -11,5 +11,5 @@ config_version=5
 [application]
 
 config/name="Autonomous Village"
-run/main_scene="res://scenes/world/world_view.tscn"
+run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.6")

@@ -1,0 +1,23 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/replay_panel.gd" id="1_replay"]
+
+[node name="ReplayPanel" type="PanelContainer"]
+custom_minimum_size = Vector2(240, 180)
+script = ExtResource("1_replay")
+
+[node name="Margin" type="MarginContainer" parent="."]
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="Margin"]
+
+[node name="Title" type="Label" parent="Margin/VBox"]
+text = "Replay / Event Feed"
+
+[node name="Events" type="RichTextLabel" parent="Margin/VBox"]
+custom_minimum_size = Vector2(220, 140)
+bbcode_enabled = false
+scroll_active = true

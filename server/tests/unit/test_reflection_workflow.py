@@ -16,7 +16,7 @@ from app.cognition.validation import ReflectionValidationError, ReflectionValida
 from app.db.enums import StageOfLife
 from app.engine.world_state import AgentState, ResourceNodeState, WorldState
 from app.memory.writer import MemoryWriter
-from app.schemas.reflection import ReflectionContext, ReflectionOutput
+from app.schemas.reflection import ReflectionContext, ReflectionOutput, ReflectionResult
 
 
 @dataclass(slots=True)
@@ -43,6 +43,18 @@ class ExplodingLLMClient:
 
     def generate(self, prompt: str, **_: object) -> str:
         raise RuntimeError("model offline")
+
+
+class LegacyHintWorkflow(ReflectionWorkflow):
+    """Exercise the overridden-run compatibility path used by legacy reflection flows."""
+
+    def run(self, agent: AgentState, context: ReflectionContext) -> ReflectionResult:
+        return ReflectionResult(
+            goals=["Recover before taking risks"],
+            beliefs=["agent:agent-1:can_improve_outcomes_by_adapting_routines:yes"],
+            memory_entries=["agent-2 gave me berries."],
+            planner_hints=["build_a_castle_tomorrow"],
+        )
 
 
 def _agent() -> AgentState:
@@ -768,6 +780,40 @@ def test_reflection_workflow_stops_before_persistence_when_validation_fails() ->
     ]
     assert execution.failure_stage == "validate"
     assert execution.validation_errors
+    assert agent.current_goal == "Maintain daily routine"
+    assert agent.beliefs == []
+    assert agent.memories == []
+    assert agent.pending_planner_hints == []
+
+
+def test_legacy_run_hint_normalization_failures_surface_as_validation_errors() -> None:
+    """Legacy overridden-run flows should report bad planner hints through the validation path."""
+
+    workflow = LegacyHintWorkflow()
+    world = _world()
+    agent = world.agents[0]
+
+    execution = workflow.execute(
+        agent,
+        world,
+        _context(),
+        validator=ReflectionValidator(),
+        goal_updater=GoalUpdater(),
+        belief_updater=BeliefUpdater(),
+        memory_writer=MemoryWriter(),
+    )
+
+    assert execution.success is False
+    assert execution.completed_stages == [
+        "load_state",
+        "retrieve_context",
+        "build_prompt",
+        "call_model",
+        "parse_json",
+        "validate",
+    ]
+    assert execution.failure_stage == "validate"
+    assert execution.validation_errors == ["Unsupported planner hint 'build_a_castle_tomorrow'."]
     assert agent.current_goal == "Maintain daily routine"
     assert agent.beliefs == []
     assert agent.memories == []

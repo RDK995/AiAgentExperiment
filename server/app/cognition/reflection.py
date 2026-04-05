@@ -82,7 +82,10 @@ class ReflectionWorkflow:
                 execution.completed_stages.extend(["build_prompt", "call_model", "parse_json"])
                 validated_result = validator.validate(self.run(agent, context))
                 execution.completed_stages.append("validate")
-                normalized_hints = normalize_planner_hints(validated_result.planner_hints, agent=agent, world=world)
+                try:
+                    normalized_hints = normalize_planner_hints(validated_result.planner_hints, agent=agent, world=world)
+                except ValueError as exc:
+                    raise ReflectionValidationError(str(exc)) from exc
                 goal_updater.apply(agent, validated_result.goals)
                 belief_updater.apply(agent, validated_result.beliefs)
                 memory_writer.write(agent, validated_result.memory_entries)

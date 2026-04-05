@@ -42,6 +42,7 @@ class LifecycleService:
         for agent in list(world.agents):
             if not agent.alive:
                 continue
+            pregnancy_started_this_tick = False
             agent.age_ticks += 1
             previous_stage = agent.stage_of_life
             agent.stage_of_life = self._stage_for_age(agent.age_ticks)
@@ -85,8 +86,9 @@ class LifecycleService:
                     )
                     if conception.event is not None:
                         events.append(conception.event)
+                        pregnancy_started_this_tick = True
 
-            if agent.pregnancy_progress_ticks is not None:
+            if agent.pregnancy_progress_ticks is not None and not pregnancy_started_this_tick:
                 agent.pregnancy_progress_ticks += 1
                 if agent.pregnancy_progress_ticks >= self._gestation_ticks:
                     father = world.agent_by_id(agent.pregnancy_partner_id) if agent.pregnancy_partner_id is not None else None

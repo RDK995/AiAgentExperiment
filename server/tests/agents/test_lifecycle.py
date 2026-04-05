@@ -9,6 +9,7 @@ from app.db.enums import AgentSex, StageOfLife
 from app.engine.event_bus import EventBus
 from app.engine.world_state import AgentState, TerrainType, TileState, WorldState
 from app.schemas.event import EventType
+from app.social.reproduction import ReproductionService
 
 
 def test_lifecycle_updates_stage_of_life_from_age_progression() -> None:
@@ -213,6 +214,61 @@ def test_start_pregnancy_can_emit_pregnancy_started_event() -> None:
     assert event.actor_ids == ["agent-1"]
     assert event.target_ids == ["agent-2"]
     assert event.payload == {"partner_id": "agent-2"}
+
+
+def test_lifecycle_does_not_advance_new_pregnancy_on_the_same_tick() -> None:
+    """A pregnancy started this tick should begin at progress zero until the next lifecycle update."""
+
+    mother = AgentState(
+        agent_id="agent-1",
+        name="Parent",
+        x=0,
+        y=0,
+        sex=AgentSex.FEMALE,
+        age_ticks=2_000,
+        stage_of_life=StageOfLife.ADULT,
+        partner_id="agent-2",
+        health=100.0,
+        family_orientation=0.8,
+    )
+    father = AgentState(
+        agent_id="agent-2",
+        name="Partner",
+        x=1,
+        y=0,
+        sex=AgentSex.MALE,
+        age_ticks=2_000,
+        stage_of_life=StageOfLife.ADULT,
+        partner_id="agent-1",
+        family_orientation=0.8,
+    )
+    world = WorldState(
+        width=2,
+        height=2,
+        tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(2) for x in range(2)],
+        agents=[mother, father],
+    )
+    lifecycle = LifecycleService(
+        gestation_ticks=2,
+        reproduction_service=ReproductionService(gestation_ticks=2, random_fn=lambda: 0.0),
+    )
+    bus = EventBus()
+
+    first_tick_events = lifecycle.update(world, tick=1, now=_now(), event_bus=bus)
+
+    assert any(event.type is EventType.PREGNANCY_STARTED for event in first_tick_events)
+    assert mother.pregnancy_progress_ticks == 0
+    assert not any(event.type is EventType.BIRTH for event in first_tick_events)
+
+    second_tick_events = lifecycle.update(world, tick=2, now=_now(), event_bus=bus)
+
+    assert mother.pregnancy_progress_ticks == 1
+    assert not any(event.type is EventType.BIRTH for event in second_tick_events)
+
+    third_tick_events = lifecycle.update(world, tick=3, now=_now(), event_bus=bus)
+
+    assert any(event.type is EventType.BIRTH for event in third_tick_events)
+    assert any(event.type is EventType.CHILD_BORN for event in third_tick_events)
 
 
 def _make_world(agent: AgentState) -> WorldState:

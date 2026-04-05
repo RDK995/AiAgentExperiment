@@ -147,6 +147,9 @@ def test_runtime_repeated_goal_failures_trigger_reflection_after_three_failures(
         await runtime.step_once()
         await runtime.step_once()
         await runtime.step_once()
+        await runtime.step_once()
+        await runtime.step_once()
+        await runtime.step_once()
         debug_state = await runtime.get_debug_state()
 
         assert debug_state["last_slow_loop_results"][0]["trigger_reasons"] == ["repeated_plan_failure"]
@@ -190,6 +193,8 @@ def test_runtime_bonded_pair_progresses_from_conception_to_birth_through_lifecyc
         runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
         runtime._agent_runtime._lifecycle_service._reproduction_service._random_fn = lambda: 0.0
 
+        await runtime.step_once()
+        await runtime.step_once()
         await runtime.step_once()
         await runtime.step_once()
         await runtime.step_once()
@@ -323,6 +328,7 @@ def test_runtime_social_window_can_progress_from_bond_attempt_to_birth_with_pers
         )
         runtime._agent_runtime._lifecycle_service._reproduction_service._random_fn = lambda: 0.0
 
+        await runtime.step_once()
         await runtime.step_once()
         await runtime.step_once()
         await runtime.step_once()

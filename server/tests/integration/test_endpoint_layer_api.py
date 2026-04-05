@@ -26,6 +26,7 @@ from app.schemas.api import (
     SpawnAgentResponse,
     SpawnFoodResponse,
     TimelineResponse,
+    WorldStreamEnvelope,
 )
 
 
@@ -37,6 +38,7 @@ def test_app_registers_new_endpoint_groups(client: TestClient) -> None:
     assert "/api/v1/world/state" in route_paths
     assert "/api/v1/world/chunk/{x}/{y}" in route_paths
     assert "/api/v1/world/events/recent" in route_paths
+    assert "/api/v1/world/stream" in route_paths
     assert "/api/v1/world/tick/run" in route_paths
     assert "/api/v1/world/seed" in route_paths
     assert "/api/v1/agents" in route_paths
@@ -96,6 +98,46 @@ def test_world_chunk_and_recent_events_endpoints_return_typed_shapes(client: Tes
     assert {"event_id", "tick", "event_type", "actor_ids", "target_ids", "payload"} <= set(events_payload[0])
 
     assert isinstance(RecentWorldEventsResponse.model_validate(events.json()), RecentWorldEventsResponse)
+
+
+def test_world_stream_websocket_emits_seed_definition_and_snapshot_batch(client: TestClient) -> None:
+    """The live world stream should expose seed bootstrap and typed snapshot/event batches."""
+
+    with client.websocket_connect(
+        "/api/v1/world/stream?seed_id=v1_village&seed_on_connect=true&poll_seconds=0.05"
+    ) as websocket:
+        seed_message = websocket.receive_json()
+        batch_message = websocket.receive_json()
+
+    seed_envelope = WorldStreamEnvelope.model_validate(seed_message)
+    batch_envelope = WorldStreamEnvelope.model_validate(batch_message)
+
+    assert seed_envelope.message_type == "seed_definition"
+    assert seed_envelope.seed_definition is not None
+    assert seed_envelope.seed_definition.seed_id == "v1_village"
+
+    assert batch_envelope.message_type == "snapshot_batch"
+    assert batch_envelope.snapshot_batch is not None
+    assert batch_envelope.snapshot_batch.snapshot.world.width == 64
+    assert len(batch_envelope.snapshot_batch.snapshot.agents) == 20
+
+
+def test_world_stream_websocket_reflects_live_tick_updates(client: TestClient) -> None:
+    """The live stream should advance with authoritative backend ticks."""
+
+    with client.websocket_connect(
+        "/api/v1/world/stream?seed_id=v1_village&seed_on_connect=true&poll_seconds=0.05"
+    ) as websocket:
+        websocket.receive_json()
+        initial_batch = WorldStreamEnvelope.model_validate(websocket.receive_json())
+        initial_tick = initial_batch.snapshot_batch.snapshot.tick
+
+        client.post("/api/v1/world/tick")
+        next_batch = WorldStreamEnvelope.model_validate(websocket.receive_json())
+
+    assert next_batch.message_type == "snapshot_batch"
+    assert next_batch.snapshot_batch is not None
+    assert next_batch.snapshot_batch.snapshot.tick >= initial_tick + 1
 
 
 def test_world_chunk_and_seed_invalid_inputs_fail_cleanly(client: TestClient) -> None:

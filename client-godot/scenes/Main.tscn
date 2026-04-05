@@ -1,0 +1,16 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/networking/snapshot_consumer.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/networking/websocket_client.gd" id="2_transport"]
+[ext_resource type="PackedScene" path="res://scenes/world/WorldRoot.tscn" id="3_world"]
+[ext_resource type="PackedScene" path="res://scenes/ui/HUD.tscn" id="4_hud"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="WebsocketClient" type="Node" parent="."]
+script = ExtResource("2_transport")
+
+[node name="WorldRoot" parent="." instance=ExtResource("3_world")]
+
+[node name="HUD" parent="." instance=ExtResource("4_hud")]

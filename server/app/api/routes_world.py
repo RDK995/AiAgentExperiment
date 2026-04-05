@@ -1,6 +1,9 @@
 """World and simulation control routes."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Query
+from fastapi import WebSocket, WebSocketDisconnect
 
 from app.api.errors import bad_request, conflict, error_responses, not_found
 from app.api.dependencies import get_runtime
@@ -14,8 +17,12 @@ from app.schemas.api import (
     RunSimulationRequest,
     SeedResponse,
     SimulationSnapshot,
+    WorldStreamBatchResponse,
+    WorldStreamEnvelope,
     WorldSeedRequest,
+    WorldSeedDefinitionResponse,
 )
+from app.services.world_seed_service import WorldSeedService
 
 router = APIRouter(prefix="/world", tags=["world"])
 
@@ -115,6 +122,75 @@ async def get_recent_world_events(
     return RecentWorldEventsResponse(events=await runtime.get_recent_world_events(limit=limit))
 
 
+@router.websocket("/stream")
+async def stream_world_events(websocket: WebSocket) -> None:
+    """Stream authoritative seed bootstrap and snapshot/event batches to clients."""
+
+    await websocket.accept()
+
+    app_state = websocket.app.state
+    runtime: SimulationRuntime = app_state.simulation_runtime
+    seed_id = websocket.query_params.get("seed_id", "v1_village")
+    seed_on_connect = websocket.query_params.get("seed_on_connect", "false").lower() == "true"
+    poll_seconds_raw = websocket.query_params.get("poll_seconds", "0.25")
+
+    try:
+        poll_seconds = min(5.0, max(0.05, float(poll_seconds_raw)))
+    except ValueError:
+        poll_seconds = 0.25
+
+    try:
+        if seed_on_connect:
+            await runtime.seed_world(seed_id=seed_id)
+        seed_definition = WorldSeedService().load_seed_definition(seed_id)
+    except ValueError as exc:
+        await websocket.send_json(
+            WorldStreamEnvelope(
+                message_type="warning",
+                warning=str(exc),
+            ).model_dump(mode="json")
+        )
+        await websocket.close(code=1008, reason=str(exc))
+        return
+
+    await websocket.send_json(
+        WorldStreamEnvelope(
+            message_type="seed_definition",
+            seed_definition=seed_definition,
+        ).model_dump(mode="json")
+    )
+
+    last_tick = -1
+    last_event_id = ""
+
+    try:
+        while True:
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=poll_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+            snapshot = await runtime.get_snapshot()
+            events = await runtime.get_recent_world_events(limit=20)
+            latest_event_id = events[-1].event_id if events else ""
+            if snapshot.tick == last_tick and latest_event_id == last_event_id:
+                continue
+
+            await websocket.send_json(
+                WorldStreamEnvelope(
+                    message_type="snapshot_batch",
+                    snapshot_batch=WorldStreamBatchResponse(
+                        snapshot=snapshot,
+                        events=events,
+                    ),
+                ).model_dump(mode="json")
+            )
+            last_tick = snapshot.tick
+            last_event_id = latest_event_id
+    except WebSocketDisconnect:
+        return
+
+
 @router.post("/seed", response_model=SeedResponse)
 async def seed_world(
     payload: WorldSeedRequest | None = None,
@@ -122,14 +198,33 @@ async def seed_world(
 ) -> SeedResponse:
     """Reset and reseed the world to a clean deterministic baseline."""
 
-    snapshot = await runtime.seed_world(initial_agent_count=payload.agent_count if payload is not None else None)
+    requested_seed_id = payload.seed_id if payload is not None else None
+    snapshot = await runtime.seed_world(
+        initial_agent_count=payload.agent_count if payload is not None else None,
+        seed_id=requested_seed_id,
+    )
     return SeedResponse(
         status="seeded",
         tick=snapshot.tick,
         width=snapshot.world.width,
         height=snapshot.world.height,
         seeded_agents=len(snapshot.agents),
+        seed_id=requested_seed_id,
     )
+
+
+@router.get(
+    "/seeds/{seed_id}",
+    response_model=WorldSeedDefinitionResponse,
+    responses=error_responses(404),
+)
+async def get_world_seed_definition(seed_id: str) -> WorldSeedDefinitionResponse:
+    """Return one deterministic world seed definition for client bootstrap/debugging."""
+
+    try:
+        return WorldSeedService().load_seed_definition(seed_id)
+    except ValueError as exc:
+        raise not_found(str(exc)) from exc
 
 
 @router.post(

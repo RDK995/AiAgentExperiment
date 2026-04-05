@@ -42,6 +42,7 @@ from app.memory.retrieval import RetrievalContextService
 from app.memory.writer import MemoryWriter
 from app.social.bonding import BondingService
 from app.social.reproduction import ReproductionService
+from app.services.world_seed_service import WorldSeedService
 from app.schemas.api import (
     AdvanceDaysResponse,
     AgentInspectResponse,
@@ -287,11 +288,15 @@ class SimulationRuntime:
                 for index, event in enumerate(recent)
             ]
 
-    async def seed_world(self, initial_agent_count: int | None = None) -> SimulationSnapshot:
+    async def seed_world(
+        self,
+        initial_agent_count: int | None = None,
+        seed_id: str | None = None,
+    ) -> SimulationSnapshot:
         """Reset the current runtime to a clean seeded baseline."""
 
         async with self._lock:
-            self._reset_world_state(initial_agent_count or len(self._world_state.agents))
+            self._reset_world_state(initial_agent_count or len(self._world_state.agents), seed_id=seed_id)
             return self._world_state.to_snapshot()
 
     async def get_agent_relationships(self, agent_id: str) -> RelationshipsResponse:
@@ -689,14 +694,17 @@ class SimulationRuntime:
         self._recent_events = self._replay_log.recent_events(limit=200)
         return snapshot
 
-    def _reset_world_state(self, initial_agent_count: int) -> None:
+    def _reset_world_state(self, initial_agent_count: int, *, seed_id: str | None = None) -> None:
         """Rebuild the world, clock, scheduler, and telemetry to a clean baseline."""
 
-        self._world_state = build_initial_world_state(
-            width=self._world_state.width,
-            height=self._world_state.height,
-            initial_agent_count=initial_agent_count,
-        )
+        if seed_id is not None:
+            self._world_state = WorldSeedService().build_world_state(seed_id)
+        else:
+            self._world_state = build_initial_world_state(
+                width=self._world_state.width,
+                height=self._world_state.height,
+                initial_agent_count=initial_agent_count,
+            )
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
         self._replay_log = ReplayEventLog(max_events=200)

@@ -1,7 +1,7 @@
 """Shared API transport models for snapshots and endpoint contracts."""
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +23,32 @@ class TileSnapshot(BaseModel):
     walkable: bool = True
 
 
+class SeedStructureSnapshot(BaseModel):
+    """Static structure definition used by the presentation layer seed renderer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    structure_id: str
+    structure_type: str
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(default=1, ge=1)
+    height: int = Field(default=1, ge=1)
+    label: str | None = None
+
+
+class SeedMarkerSnapshot(BaseModel):
+    """Static marker definition for world landmarks and debug labels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    marker_id: str
+    marker_type: str
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    label: str | None = None
+
+
 class WorldSnapshot(BaseModel):
     """Serialized world grid snapshot."""
 
@@ -31,6 +57,18 @@ class WorldSnapshot(BaseModel):
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     tiles: list[TileSnapshot]
+
+
+class SeedWorldSnapshot(BaseModel):
+    """Expanded static world seed definition for client bootstrap and debugging."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    tiles: list[TileSnapshot]
+    structures: list[SeedStructureSnapshot]
+    markers: list[SeedMarkerSnapshot]
 
 
 class SimulationSnapshot(BaseModel):
@@ -58,6 +96,7 @@ class WorldSeedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_count: int | None = Field(default=None, ge=1, le=200)
+    seed_id: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class MoveAgentRequest(BaseModel):
@@ -102,6 +141,56 @@ class SeedResponse(BaseModel):
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     seeded_agents: int = Field(ge=0)
+    seed_id: str | None = None
+
+
+class SeedAgentSummary(BaseModel):
+    """Static seed-facing agent definition used by the Godot bootstrap layer."""
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    agent_id: str
+    name: str
+    stage_of_life: str
+    sex: str
+    household_id: str | None = None
+    home_structure_id: str | None = None
+    partner_id: str | None = None
+    position: dict[str, int]
+    role: str | None = None
+
+
+class SeedHouseholdSummary(BaseModel):
+    """Static household grouping for dashboard/debug presentation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    household_id: str
+    home_structure_id: str
+    member_ids: list[str]
+    label: str | None = None
+
+
+class SeedSocialLinkSummary(BaseModel):
+    """Static social structure link seeded into the v1 village scenario."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    agent_ids: list[str]
+    note: str | None = None
+
+
+class WorldSeedDefinitionResponse(BaseModel):
+    """Expanded deterministic seed definition used by the Godot client bootstrap."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seed_id: str
+    world: SeedWorldSnapshot
+    agents: list[SeedAgentSummary]
+    households: list[SeedHouseholdSummary]
+    social_links: list[SeedSocialLinkSummary]
 
 
 class GoalSummary(BaseModel):
@@ -409,3 +498,23 @@ class RecentWorldEventsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     events: list[WorldEventSchema]
+
+
+class WorldStreamBatchResponse(BaseModel):
+    """One live batch emitted to presentation clients."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot: SimulationSnapshot
+    events: list[WorldEventSchema]
+
+
+class WorldStreamEnvelope(BaseModel):
+    """Envelope emitted on the live world stream."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_type: Literal["seed_definition", "snapshot_batch", "warning"]
+    seed_definition: WorldSeedDefinitionResponse | None = None
+    snapshot_batch: WorldStreamBatchResponse | None = None
+    warning: str | None = None

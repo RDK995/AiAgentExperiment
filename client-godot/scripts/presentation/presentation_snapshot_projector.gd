@@ -15,6 +15,16 @@ static func project(snapshot: Dictionary) -> Dictionary:
 	}
 
 
+static func project_seed_definition(seed_definition: Dictionary) -> Dictionary:
+	return {
+		"seed_id": str(seed_definition.get("seed_id", "")),
+		"world": _project_seed_world(seed_definition.get("world", {})),
+		"agents": _project_seed_agents(seed_definition.get("agents", [])),
+		"households": _project_dictionary_array(seed_definition.get("households", [])),
+		"social_links": _project_dictionary_array(seed_definition.get("social_links", [])),
+	}
+
+
 static func _project_world(world_value: Variant) -> Dictionary:
 	if typeof(world_value) != TYPE_DICTIONARY:
 		return {
@@ -47,6 +57,8 @@ static func _project_world(world_value: Variant) -> Dictionary:
 		"width": int(world.get("width", 0)),
 		"height": int(world.get("height", 0)),
 		"tiles": projected_tiles,
+		"structures": _project_dictionary_array(world.get("structures", [])),
+		"markers": _project_dictionary_array(world.get("markers", [])),
 	}
 
 
@@ -76,7 +88,53 @@ static func _project_agents(agents_value: Variant) -> Array[Dictionary]:
 					"y": int(position.get("y", 0)),
 				},
 				"current_action": str(agent.get("current_action", "idle")),
+				"stage_of_life": str(agent.get("stage_of_life", "adult")),
+				"household_id": agent.get("household_id"),
+				"partner_id": agent.get("partner_id"),
+				"current_goal": agent.get("current_goal"),
+				"needs": agent.get("needs", {}),
 			}
 		)
 
 	return projected_agents
+
+
+static func _project_seed_world(world_value: Variant) -> Dictionary:
+	if typeof(world_value) != TYPE_DICTIONARY:
+		return {"width": 0, "height": 0, "tiles": [], "structures": [], "markers": []}
+
+	var world: Dictionary = world_value
+	return {
+		"width": int(world.get("width", 0)),
+		"height": int(world.get("height", 0)),
+		"tiles": _project_dictionary_array(world.get("tiles", [])),
+		"structures": _project_dictionary_array(world.get("structures", [])),
+		"markers": _project_dictionary_array(world.get("markers", [])),
+	}
+
+
+static func _project_seed_agents(agents_value: Variant) -> Array[Dictionary]:
+	var projected_agents: Array[Dictionary] = []
+	if typeof(agents_value) != TYPE_ARRAY:
+		return projected_agents
+
+	var agents: Array = agents_value
+	for agent_value in agents:
+		if typeof(agent_value) != TYPE_DICTIONARY:
+			continue
+		var agent: Dictionary = agent_value
+		projected_agents.append(agent.duplicate(true))
+	return projected_agents
+
+
+static func _project_dictionary_array(value: Variant) -> Array[Dictionary]:
+	var projected: Array[Dictionary] = []
+	if typeof(value) != TYPE_ARRAY:
+		return projected
+
+	var values: Array = value
+	for item in values:
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		projected.append((item as Dictionary).duplicate(true))
+	return projected

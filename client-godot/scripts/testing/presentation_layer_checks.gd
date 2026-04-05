@@ -12,17 +12,67 @@ func _initialize() -> void:
 
 func _run_checks() -> void:
 	_check_valid_snapshot_is_accepted()
+	_check_valid_seed_definition_is_accepted()
+	_check_valid_stream_envelopes_are_accepted()
+	_check_invalid_stream_envelope_is_rejected()
 	_check_only_snapshot_contract_fields_are_accepted()
 	_check_forbidden_authoritative_fields_are_rejected()
+	_check_snapshot_missing_agents_is_rejected()
 	_check_backend_agent_needs_field_is_accepted()
 	_check_projection_discards_non_presentational_fields()
+	_check_projection_keeps_debug_ui_fields()
+	_check_projection_handles_missing_optional_agent_fields()
+	_check_seed_projection_keeps_households_and_social_links()
+	_check_projection_discards_agents_without_positions()
 	_check_visual_interpolation_does_not_mutate_authoritative_positions()
+	_check_main_scene_structure_loads()
 
 
 func _check_valid_snapshot_is_accepted() -> void:
 	var snapshot := _sample_snapshot()
 	var errors := PresentationBoundaryValidator.validate_snapshot(snapshot)
 	assert(errors.is_empty(), "Expected a valid presentation snapshot.")
+
+
+func _check_valid_seed_definition_is_accepted() -> void:
+	var seed_definition := _sample_seed_definition()
+	var errors := PresentationBoundaryValidator.validate_seed_definition(seed_definition)
+	assert(errors.is_empty(), "Expected a valid client-facing seed definition.")
+
+
+func _check_valid_stream_envelopes_are_accepted() -> void:
+	var seed_errors := PresentationBoundaryValidator.validate_stream_envelope(
+		{
+			"message_type": "seed_definition",
+			"seed_definition": _sample_seed_definition(),
+		}
+	)
+	assert(seed_errors.is_empty(), "Expected a valid seed-definition stream envelope.")
+
+	var snapshot_errors := PresentationBoundaryValidator.validate_stream_envelope(
+		{
+			"message_type": "snapshot_batch",
+			"snapshot_batch": {
+				"snapshot": _sample_snapshot(),
+				"events": [
+					{"event_id": "evt-1", "tick": 12, "event_type": "child_born", "actor_ids": ["agent-1"], "target_ids": [], "payload": {}}
+				],
+			},
+		}
+	)
+	assert(snapshot_errors.is_empty(), "Expected a valid snapshot-batch stream envelope.")
+
+
+func _check_invalid_stream_envelope_is_rejected() -> void:
+	var errors := PresentationBoundaryValidator.validate_stream_envelope(
+		{
+			"message_type": "snapshot_batch",
+			"snapshot_batch": {
+				"events": [],
+			},
+		}
+	)
+	assert(not errors.is_empty(), "Expected malformed snapshot-batch envelopes to be rejected.")
 
 
 func _check_forbidden_authoritative_fields_are_rejected() -> void:
@@ -57,6 +107,20 @@ func _check_only_snapshot_contract_fields_are_accepted() -> void:
 	assert(found_contract_error, "Expected client to reject non-contract snapshot fields.")
 
 
+func _check_snapshot_missing_agents_is_rejected() -> void:
+	var snapshot := _sample_snapshot()
+	snapshot.erase("agents")
+
+	var errors := PresentationBoundaryValidator.validate_snapshot(snapshot)
+	var found_agents_error := false
+	for message in errors:
+		if "missing 'agents'" in message:
+			found_agents_error = true
+			break
+
+	assert(found_agents_error, "Expected snapshots missing 'agents' to be rejected.")
+
+
 func _check_backend_agent_needs_field_is_accepted() -> void:
 	var snapshot := _sample_snapshot()
 	var agents: Array = snapshot["agents"]
@@ -77,15 +141,65 @@ func _check_projection_discards_non_presentational_fields() -> void:
 	var snapshot := _sample_snapshot()
 	var agents: Array = snapshot["agents"]
 	var first_agent: Dictionary = agents[0]
-	first_agent["needs"] = {"hunger": 10.0}
+	first_agent["inventory"] = {"berries": 2}
+	agents[0] = first_agent
+	snapshot["agents"] = agents
+
+	var errors := PresentationBoundaryValidator.validate_snapshot(snapshot)
+	var found_inventory_error := false
+	for message in errors:
+		if "forbidden authoritative field 'inventory'" in message:
+			found_inventory_error = true
+			break
+
+	assert(found_inventory_error, "Client validation should reject authoritative inventory fields.")
+
+
+func _check_projection_keeps_debug_ui_fields() -> void:
+	var projected := PresentationSnapshotProjector.project(_sample_snapshot())
+	var projected_agent: Dictionary = projected["agents"][0]
+
+	assert(projected_agent["stage_of_life"] == "adult", "Projected snapshot should keep stage_of_life for UI.")
+	assert(projected_agent["household_id"] == "household-1", "Projected snapshot should keep household binding.")
+	assert(projected_agent["current_goal"] == "Gather food", "Projected snapshot should keep compact goal text.")
+
+
+func _check_projection_handles_missing_optional_agent_fields() -> void:
+	var snapshot := _sample_snapshot()
+	var agents: Array = snapshot["agents"]
+	var first_agent: Dictionary = agents[0]
+	first_agent.erase("partner_id")
+	first_agent.erase("current_goal")
+	first_agent.erase("needs")
+	agents[0] = first_agent
+	snapshot["agents"] = agents
+
+	var errors := PresentationBoundaryValidator.validate_snapshot(snapshot)
+	assert(errors.is_empty(), "Missing optional agent fields should degrade gracefully.")
+
+	var projected := PresentationSnapshotProjector.project(snapshot)
+	var projected_agent: Dictionary = projected["agents"][0]
+	assert(projected_agent["partner_id"] == null, "Missing partner should project as null.")
+	assert(projected_agent["current_goal"] == null, "Missing goal should project as null.")
+	assert(projected_agent["needs"] == {}, "Missing needs should project to an empty dictionary.")
+
+
+func _check_seed_projection_keeps_households_and_social_links() -> void:
+	var projected := PresentationSnapshotProjector.project_seed_definition(_sample_seed_definition())
+	assert((projected.get("households", []) as Array).size() == 1, "Seed projection should keep households for the dashboard.")
+	assert((projected.get("social_links", []) as Array).size() == 1, "Seed projection should keep social links for the inspector.")
+
+
+func _check_projection_discards_agents_without_positions() -> void:
+	var snapshot := _sample_snapshot()
+	var agents: Array = snapshot["agents"]
+	var first_agent: Dictionary = agents[0]
+	first_agent.erase("position")
 	agents[0] = first_agent
 	snapshot["agents"] = agents
 
 	var projected := PresentationSnapshotProjector.project(snapshot)
-	var projected_agent: Dictionary = projected["agents"][0]
-
-	assert(not projected_agent.has("needs"), "Projected client snapshot should discard non-render fields.")
-	assert(projected_agent["position"]["x"] == 2, "Projected snapshot should keep render coordinates.")
+	assert((projected.get("agents", []) as Array).is_empty(), "Projection should skip malformed agents without valid positions.")
 
 
 func _check_visual_interpolation_does_not_mutate_authoritative_positions() -> void:
@@ -116,6 +230,15 @@ func _check_visual_interpolation_does_not_mutate_authoritative_positions() -> vo
 	)
 
 
+func _check_main_scene_structure_loads() -> void:
+	var main_scene := load("res://scenes/Main.tscn")
+	var instance := main_scene.instantiate()
+	assert(instance.has_node("WebsocketClient"), "Main scene should contain the transport node.")
+	assert(instance.has_node("WorldRoot"), "Main scene should contain the world root.")
+	assert(instance.has_node("HUD"), "Main scene should contain the HUD.")
+	instance.queue_free()
+
+
 func _sample_snapshot() -> Dictionary:
 	return {
 		"tick": 12,
@@ -133,7 +256,53 @@ func _sample_snapshot() -> Dictionary:
 				"agent_id": "agent-1",
 				"name": "Villager 1",
 				"position": {"x": 2, "y": 6},
+				"stage_of_life": "adult",
+				"household_id": "household-1",
+				"partner_id": "agent-2",
+				"current_goal": "Gather food",
+				"needs": {
+					"hunger": 10.0,
+					"thirst": 20.0,
+					"fatigue": 30.0
+				},
 				"current_action": "walking",
 			}
 		],
+	}
+
+
+func _sample_seed_definition() -> Dictionary:
+	return {
+		"seed_id": "v1_village",
+		"world": {
+			"width": 64,
+			"height": 64,
+			"tiles": [
+				{"x": 0, "y": 0, "terrain": "forest", "walkable": true},
+				{"x": 1, "y": 0, "terrain": "grass", "walkable": true}
+			],
+			"structures": [
+				{"structure_id": "house-1", "structure_type": "house", "x": 10, "y": 12, "width": 3, "height": 3}
+			],
+			"markers": [
+				{"marker_id": "berries-west", "marker_type": "berries", "x": 2, "y": 24, "label": "Berry Patch"}
+			]
+		},
+		"agents": [
+			{
+				"agent_id": "agent-1",
+				"name": "Villager 1",
+				"stage_of_life": "adult",
+				"sex": "female",
+				"household_id": "household-1",
+				"home_structure_id": "house-1",
+				"position": {"x": 10, "y": 12}
+			}
+		],
+		"households": [
+			{"household_id": "household-1", "home_structure_id": "house-1", "member_ids": ["agent-1"]}
+		],
+		"social_links": [
+			{"kind": "bonded_pair", "agent_ids": ["agent-1", "agent-2"]}
+		]
 	}

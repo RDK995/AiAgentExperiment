@@ -19,6 +19,7 @@ class TerrainType(str, Enum):
     GRASS = "grass"
     PATH = "path"
     WATER = "water"
+    FOREST = "forest"
 
 
 @dataclass(slots=True)
@@ -119,6 +120,10 @@ class AgentState:
                 fatigue=self.fatigue,
             ),
             current_action=self.current_action,
+            stage_of_life=self.stage_of_life,
+            household_id=self.household_id,
+            partner_id=self.partner_id,
+            current_goal=self.current_goal,
         )
 
     def to_state_snapshot(self) -> AgentStateSnapshot:

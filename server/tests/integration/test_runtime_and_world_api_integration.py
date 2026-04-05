@@ -32,7 +32,7 @@ from app.schemas.api import (
     ReplayResponse,
     TimelineResponse,
 )
-from app.schemas.reflection import ReflectionContext, ReflectionResult
+from app.schemas.reflection import ReflectionContext, ReflectionOutput, ReflectionResult
 
 
 def test_runtime_step_once_updates_authoritative_state_end_to_end() -> None:
@@ -359,6 +359,51 @@ def test_runtime_force_reflect_accepts_persistent_relationship_ids_in_reflection
         )
 
         engine.dispose()
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_accepts_existing_fast_loop_hints_from_valid_output() -> None:
+    """Reflection output using eat_soon/drink_soon should remain valid and reach planner hints."""
+
+    class HintLLMClient:
+        def generate(self, prompt: str, **_: object) -> str:
+            del prompt
+            return ReflectionOutput(
+                summary="Recover and replenish.",
+                mood_delta={"morale": 0.5},
+                belief_updates=[
+                    {
+                        "subject_type": "agent",
+                        "subject_id": "agent-1",
+                        "predicate": "can_improve_outcomes_by_adapting_routines",
+                        "object_value": "yes",
+                        "confidence_delta": 0.1,
+                    }
+                ],
+                goal_updates=[
+                    {
+                        "action": "create",
+                        "goal_type": "safety",
+                        "title": "Recover before taking risks",
+                        "priority": 0.8,
+                        "horizon_days": 1,
+                    }
+                ],
+                memory_candidates=[{"text": "I should recover.", "salience": 0.7, "valence": 0.1}],
+                tomorrow_intentions=["eat_soon", "drink_soon"],
+            ).model_dump_json()
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+        runtime._slow_loop_service._reflection_workflow = ReflectionWorkflow(llm_client=HintLLMClient())
+
+        reflection = await runtime.force_reflect("agent-1")
+
+        assert reflection.applied is True
+        assert reflection.failure_stage is None
+        assert reflection.planner_hints == ["eat_soon", "drink_soon"]
+        assert runtime._world_state.agent_by_id("agent-1").pending_planner_hints == ["eat_soon", "drink_soon"]
 
     asyncio.run(run_test())
 

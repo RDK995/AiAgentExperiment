@@ -99,6 +99,8 @@ class ReflectionValidator:
         allowed_literals = {
             "keep_routine",
             "reflect_on_failures",
+            "eat_soon",
+            "drink_soon",
             "rest_soon",
             "prioritize_food_security",
             "visit_partner",

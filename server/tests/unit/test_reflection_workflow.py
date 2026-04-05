@@ -530,6 +530,43 @@ def test_reflection_validator_accepts_persistent_uuid_agent_subject_ids() -> Non
     assert validator.validate_output(output, agent=agent, world=world) is output
 
 
+def test_reflection_validator_accepts_existing_fast_loop_planner_hints() -> None:
+    """Reflection validation should stay compatible with fast-loop hint literals still in use."""
+
+    validator = ReflectionValidator()
+    world = _world()
+    agent = world.agents[0]
+
+    output = ReflectionOutput.model_validate(
+        {
+            "summary": "good",
+            "mood_delta": {},
+            "belief_updates": [
+                {
+                    "subject_type": "agent",
+                    "subject_id": "agent-1",
+                    "predicate": "can_improve_outcomes_by_adapting_routines",
+                    "object_value": "yes",
+                    "confidence_delta": 0.1,
+                }
+            ],
+            "goal_updates": [
+                {
+                    "action": "create",
+                    "goal_type": "safety",
+                    "title": "Recover before taking risks",
+                    "priority": 0.8,
+                    "horizon_days": 1,
+                }
+            ],
+            "memory_candidates": [{"text": "I should recover.", "salience": 0.7, "valence": 0.1}],
+            "tomorrow_intentions": ["eat_soon", "drink_soon"],
+        }
+    )
+
+    assert validator.validate_output(output, agent=agent, world=world) is output
+
+
 def test_reflection_validator_rejects_context_incompatible_planner_hints() -> None:
     """Planner hints that require missing context should be rejected explicitly."""
 

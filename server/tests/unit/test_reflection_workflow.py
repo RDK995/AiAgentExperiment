@@ -567,6 +567,58 @@ def test_reflection_validator_accepts_existing_fast_loop_planner_hints() -> None
     assert validator.validate_output(output, agent=agent, world=world) is output
 
 
+def test_reflection_validator_normalizes_high_level_intentions_into_canonical_planner_hints() -> None:
+    """High-level reflection intentions should normalize into planner-consumable canonical hints."""
+
+    validator = ReflectionValidator()
+    world = _world()
+    world.agents[1].name = "Cara"
+    agent = world.agents[0]
+
+    output = ReflectionOutput.model_validate(
+        {
+            "summary": "good",
+            "mood_delta": {},
+            "belief_updates": [
+                {
+                    "subject_type": "agent",
+                    "subject_id": "agent-1",
+                    "predicate": "can_improve_outcomes_by_adapting_routines",
+                    "object_value": "yes",
+                    "confidence_delta": 0.1,
+                }
+            ],
+            "goal_updates": [
+                {
+                    "action": "create",
+                    "goal_type": "safety",
+                    "title": "Recover before taking risks",
+                    "priority": 0.8,
+                    "horizon_days": 1,
+                }
+            ],
+            "memory_candidates": [{"text": "I should recover.", "salience": 0.7, "valence": 0.1}],
+            "tomorrow_intentions": [
+                "spend_more_time_with_partner",
+                "avoid_cara_when_possible",
+                "prioritize_food_security",
+                "focus_on_recovery",
+                "stay_close_to_home",
+            ],
+        }
+    )
+
+    validated = validator.validate_output(output, agent=agent, world=world)
+
+    assert validated.tomorrow_intentions == [
+        "visit_partner",
+        "avoid_agent_agent-2",
+        "prioritize_food_security",
+        "focus_on_recovery",
+        "stay_close_to_home",
+    ]
+
+
 def test_reflection_validator_rejects_context_incompatible_planner_hints() -> None:
     """Planner hints that require missing context should be rejected explicitly."""
 

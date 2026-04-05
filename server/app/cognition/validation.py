@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import re
 import uuid
 
+from app.agents.planner_hints import normalize_planner_hints
 from app.engine.world_state import AgentState, WorldState
 from app.schemas.reflection import ReflectionOutput, ReflectionResult
 
@@ -42,7 +42,7 @@ class ReflectionValidator:
         self._validate_mood_delta(output.mood_delta)
         self._validate_belief_updates(output, world)
         self._validate_goal_volume(output)
-        self._validate_planner_hints(output, agent, world)
+        output.tomorrow_intentions = self._validate_planner_hints(output, agent, world)
         self.validate(output.to_reflection_result())
         return output
 
@@ -94,33 +94,18 @@ class ReflectionValidator:
                 raise ReflectionValidationError("Reflection cannot invent buildings.")
 
     @staticmethod
-    def _validate_planner_hints(output: ReflectionOutput, agent: AgentState, world: WorldState) -> None:
-        known_agent_ids = {candidate.agent_id for candidate in world.agents}
-        allowed_literals = {
-            "keep_routine",
-            "reflect_on_failures",
-            "eat_soon",
-            "drink_soon",
-            "rest_soon",
-            "prioritize_food_security",
-            "visit_partner",
-            "focus_on_recovery",
-            "gather_resources",
-        }
-        avoid_pattern = re.compile(r"^avoid_agent_(.+)$")
-        for hint in output.tomorrow_intentions:
-            if hint in allowed_literals:
-                if hint == "visit_partner" and agent.partner_id is None:
-                    raise ReflectionValidationError("visit_partner requires a current partner.")
-                if hint == "gather_resources" and not world.resources:
-                    raise ReflectionValidationError("gather_resources requires known resources.")
-                continue
-            match = avoid_pattern.match(hint)
-            if match:
-                if match.group(1) not in known_agent_ids:
-                    raise ReflectionValidationError("avoid_agent hint referenced an unknown agent.")
-                continue
-            raise ReflectionValidationError(f"Unsupported planner hint '{hint}'.")
+    def _validate_planner_hints(output: ReflectionOutput, agent: AgentState, world: WorldState) -> list[str]:
+        try:
+            normalized = normalize_planner_hints(output.tomorrow_intentions, agent=agent, world=world)
+        except ValueError as exc:
+            raise ReflectionValidationError(str(exc)) from exc
+
+        for hint in normalized:
+            if hint == "visit_partner" and agent.partner_id is None:
+                raise ReflectionValidationError("visit_partner requires a current partner.")
+            if hint == "gather_resources" and not world.resources:
+                raise ReflectionValidationError("gather_resources requires known resources.")
+        return normalized
 
 
 def _is_uuid_string(value: str) -> bool:

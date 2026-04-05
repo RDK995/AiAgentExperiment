@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.agents.actions import ActionCandidate, ActionType, PlannedTask, SelectedAction, TaskType
+from app.agents.planner_hints import enrich_tasks_with_hints, rerank_candidates_with_hints
 from app.agents.perception import PerceptionResult
 from app.engine.world_state import AgentState
 
@@ -18,7 +19,8 @@ class ActionPlanner:
     ) -> SelectedAction:
         """Choose the highest-value action with a simple continue/interrupt policy."""
 
-        top_candidate = candidates[0]
+        ranked_candidates = rerank_candidates_with_hints(agent, candidates, perception)
+        top_candidate = ranked_candidates[0]
         tasks = self.plan_objective(top_candidate.action_type.value, agent, perception)
         if agent.current_action == top_candidate.action_type.value:
             return SelectedAction(
@@ -43,61 +45,81 @@ class ActionPlanner:
         """Expand a selected objective into a simple ordered task chain."""
 
         if objective == "drink":
-            return self._move_then(agent, perception, "water", [TaskType.FETCH_WATER, TaskType.DRINK], fallback=[TaskType.DRINK])
+            return enrich_tasks_with_hints(
+                self._move_then(agent, perception, "water", [TaskType.FETCH_WATER, TaskType.DRINK], fallback=[TaskType.DRINK]),
+                objective=objective,
+                agent=agent,
+            )
         if objective == "eat":
-            return self._move_then(
-                agent,
-                perception,
-                "food",
-                [TaskType.GATHER_FOOD, TaskType.EAT],
-                fallback=[TaskType.EAT],
+            return enrich_tasks_with_hints(
+                self._move_then(
+                    agent,
+                    perception,
+                    "food",
+                    [TaskType.GATHER_FOOD, TaskType.EAT],
+                    fallback=[TaskType.EAT],
+                ),
+                objective=objective,
+                agent=agent,
             )
         if objective in {"sleep", "rest"}:
-            return [PlannedTask(TaskType.REST)]
+            return enrich_tasks_with_hints([PlannedTask(TaskType.REST)], objective=objective, agent=agent)
         if objective == "fetch_water":
-            return self._move_then(
-                agent,
-                perception,
-                "water",
-                [TaskType.FETCH_WATER, TaskType.DRINK],
-                fallback=[TaskType.FETCH_WATER, TaskType.DRINK],
+            return enrich_tasks_with_hints(
+                self._move_then(
+                    agent,
+                    perception,
+                    "water",
+                    [TaskType.FETCH_WATER, TaskType.DRINK],
+                    fallback=[TaskType.FETCH_WATER, TaskType.DRINK],
+                ),
+                objective=objective,
+                agent=agent,
             )
         if objective == "gather_food":
-            return self._move_then(
-                agent,
-                perception,
-                "food",
-                [TaskType.GATHER_FOOD, TaskType.EAT],
-                fallback=[TaskType.GATHER_FOOD, TaskType.EAT],
+            return enrich_tasks_with_hints(
+                self._move_then(
+                    agent,
+                    perception,
+                    "food",
+                    [TaskType.GATHER_FOOD, TaskType.EAT],
+                    fallback=[TaskType.GATHER_FOOD, TaskType.EAT],
+                ),
+                objective=objective,
+                agent=agent,
             )
         if objective == "feed_household":
-            return [
+            return enrich_tasks_with_hints([
                 PlannedTask(TaskType.MOVE_TO, metadata={"label": "storage"}),
                 PlannedTask(TaskType.INSPECT_STOCK),
                 PlannedTask(TaskType.GATHER_FOOD),
                 PlannedTask(TaskType.MOVE_TO, metadata={"label": "home"}),
                 PlannedTask(TaskType.COOK),
                 PlannedTask(TaskType.DISTRIBUTE_FOOD),
-            ]
+            ], objective=objective, agent=agent)
         if objective == "socialize":
-            return [PlannedTask(TaskType.SOCIALIZE)]
+            return enrich_tasks_with_hints([PlannedTask(TaskType.SOCIALIZE)], objective=objective, agent=agent)
         if objective == "court":
-            return [PlannedTask(TaskType.COURT)]
+            return enrich_tasks_with_hints([PlannedTask(TaskType.COURT)], objective=objective, agent=agent)
         if objective == "care_for_child":
-            return self._move_then(
-                agent,
-                perception,
-                "infant",
-                [TaskType.CARE_FOR_CHILD],
-                fallback=[TaskType.CARE_FOR_CHILD],
+            return enrich_tasks_with_hints(
+                self._move_then(
+                    agent,
+                    perception,
+                    "infant",
+                    [TaskType.CARE_FOR_CHILD],
+                    fallback=[TaskType.CARE_FOR_CHILD],
+                ),
+                objective=objective,
+                agent=agent,
             )
         if objective == "work_field":
-            return [PlannedTask(TaskType.WORK_FIELD)]
+            return enrich_tasks_with_hints([PlannedTask(TaskType.WORK_FIELD)], objective=objective, agent=agent)
         if objective == "wander":
-            return [PlannedTask(TaskType.WANDER_STEP)]
+            return enrich_tasks_with_hints([PlannedTask(TaskType.WANDER_STEP)], objective=objective, agent=agent)
         if objective == "flee":
-            return [PlannedTask(TaskType.FLEE_STEP)]
-        return [PlannedTask(TaskType.WANDER_STEP)]
+            return enrich_tasks_with_hints([PlannedTask(TaskType.FLEE_STEP)], objective=objective, agent=agent)
+        return enrich_tasks_with_hints([PlannedTask(TaskType.WANDER_STEP)], objective=objective, agent=agent)
 
     @staticmethod
     def _move_then(

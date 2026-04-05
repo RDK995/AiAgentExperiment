@@ -193,7 +193,9 @@ def consume_planner_hints_for_action(
     remaining = list(raw_hints)
     for hint in interpreted_hints:
         if _hint_matches_action(hint, selected_action=selected_action, visible_agents=visible_agents):
-            remaining.remove(hint.canonical)
+            token_to_remove = hint.raw if hint.raw in remaining else hint.canonical
+            if token_to_remove in remaining:
+                remaining.remove(token_to_remove)
             break
     return remaining
 

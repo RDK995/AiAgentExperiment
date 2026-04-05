@@ -137,3 +137,15 @@ def test_consume_planner_hints_leaves_queue_unchanged_when_action_does_not_match
     )
 
     assert remaining == ["prioritize_food_security", "stay_close_to_home"]
+
+
+def test_consume_planner_hints_removes_stored_alias_token_without_requiring_canonical_value() -> None:
+    """Legacy stored aliases should be consumed safely when they match a selected legal action."""
+
+    remaining = consume_planner_hints_for_action(
+        ["spend_more_time_with_partner", "prioritize_food_security"],
+        selected_action="socialize",
+        perception=PerceptionResult(visible_agents=["agent-2"]),
+    )
+
+    assert remaining == ["prioritize_food_security"]

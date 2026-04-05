@@ -269,7 +269,11 @@ def test_runtime_day_rollover_expires_previous_day_summary_candidates() -> None:
 
         receiver_context = next(context for context in workflow.calls if context.agent_id == "agent-2")
         receiver = runtime._world_state.agent_by_id("agent-2")
-        assert receiver_context.trigger_reasons == ["day_rollover"]
+        assert receiver_context.trigger_reasons == [
+            "day_rollover",
+            "major_gift",
+            "severe_hunger_or_injury",
+        ]
         assert receiver_context.recent_events[:3] == [
             "Ate a meal.",
             "Slept well.",

@@ -376,6 +376,31 @@ class ForceReflectResponse(BaseModel):
     applied: bool
     planner_hints: list[str]
     trigger_reasons: list[str]
+    completed_stages: list[str] = Field(default_factory=list)
+    failure_stage: str | None = None
+    validation_errors: list[str] = Field(default_factory=list)
+
+
+class ReflectionRunSummary(BaseModel):
+    """Compact debug/audit view of one reflection workflow execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    trigger_reasons: list[str]
+    applied: bool
+    planner_hints: list[str]
+    completed_stages: list[str] = Field(default_factory=list)
+    failure_stage: str | None = None
+    validation_errors: list[str] = Field(default_factory=list)
+
+
+class ReflectionRunsResponse(BaseModel):
+    """Response wrapper for recent reflection workflow executions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reflections: list[ReflectionRunSummary]
 
 
 class RecentWorldEventsResponse(BaseModel):

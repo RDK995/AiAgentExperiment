@@ -17,6 +17,7 @@ from app.schemas.api import (
     MemoryRetrieveResponse,
     MemorySummarizeResponse,
     RecentWorldEventsResponse,
+    ReflectionRunsResponse,
     RelationshipsResponse,
     ResetWorldResponse,
     ReplayResponse,
@@ -52,6 +53,7 @@ def test_app_registers_new_endpoint_groups(client: TestClient) -> None:
     assert "/api/v1/memory/{agent_id}/summarize" in route_paths
     assert "/api/v1/debug/metrics" in route_paths
     assert "/api/v1/debug/replay" in route_paths
+    assert "/api/v1/debug/reflections" in route_paths
     assert "/api/v1/debug/inspect/agent/{agent_id}" in route_paths
     assert "/api/v1/debug/inspect/household/{household_id}" in route_paths
     assert "/api/v1/admin/spawn-agent" in route_paths
@@ -278,11 +280,13 @@ def test_debug_routes_return_metrics_and_inspection_payloads(client: TestClient)
     client.post("/api/v1/agents/agent-1/force-reflect")
     metrics = client.get("/api/v1/debug/metrics")
     replay = client.get("/api/v1/debug/replay")
+    reflections = client.get("/api/v1/debug/reflections")
     inspect_agent = client.get("/api/v1/debug/inspect/agent/agent-1")
     inspect_household = client.get("/api/v1/debug/inspect/household/unknown-household")
 
     assert metrics.status_code == 200
     assert replay.status_code == 200
+    assert reflections.status_code == 200
     assert inspect_agent.status_code == 200
     assert inspect_household.status_code == 404
 
@@ -297,6 +301,7 @@ def test_debug_routes_return_metrics_and_inspection_payloads(client: TestClient)
     assert inspect_agent.json()["agent"]["agent_id"] == "agent-1"
     assert isinstance(DebugMetricsResponse.model_validate(metrics.json()), DebugMetricsResponse)
     assert isinstance(ReplayResponse.model_validate(replay.json()), ReplayResponse)
+    assert isinstance(ReflectionRunsResponse.model_validate(reflections.json()), ReflectionRunsResponse)
     assert isinstance(AgentInspectResponse.model_validate(inspect_agent.json()), AgentInspectResponse)
     assert inspect_household.json() == {
         "error": "not_found",

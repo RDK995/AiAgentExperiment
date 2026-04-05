@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event as sqlalchemy_event, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.cognition.reflection import ReflectionWorkflow
 from app.db.base import Base, import_models
 from app.db.models import WorldEvent
+from app.db.repositories import AgentCreateParams, AgentRepository, GoalCreateParams, RelationshipCreateParams
+from app.db.enums import AgentSex, GoalSource, GoalStatus, GoalType, StageOfLife
 from app.engine.scheduler import ScheduledTask
 from app.engine.tick_loop import SimulationRuntime
 from app.engine.world_state import AgentState, ResourceNodeState, TerrainType, TileState, WorldState, build_initial_world_state
@@ -24,10 +27,12 @@ from app.schemas.api import (
     EpisodesResponse,
     ForceReflectResponse,
     GoalsResponse,
+    ReflectionRunsResponse,
     RelationshipsResponse,
     ReplayResponse,
     TimelineResponse,
 )
+from app.schemas.reflection import ReflectionContext, ReflectionOutput, ReflectionResult
 
 
 def test_runtime_step_once_updates_authoritative_state_end_to_end() -> None:
@@ -126,6 +131,30 @@ def test_runtime_external_event_is_consumed_by_slow_loop_on_next_tick() -> None:
     asyncio.run(run_test())
 
 
+def test_runtime_repeated_goal_failures_trigger_reflection_after_three_failures() -> None:
+    """Plan-failure driven reflection should appear through the real runtime tick path."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=1,
+            height=1,
+            tiles=[TileState(x=0, y=0, terrain=TerrainType.PATH, walkable=True)],
+            agents=[AgentState(agent_id="agent-1", name="Villager 1", x=0, y=0)],
+            day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        await runtime.step_once()
+        await runtime.step_once()
+        await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        assert debug_state["last_slow_loop_results"][0]["trigger_reasons"] == ["repeated_plan_failure"]
+        assert "reflect_on_failures" in runtime._world_state.agents[0].pending_planner_hints
+
+    asyncio.run(run_test())
+
+
 def test_runtime_agent_detail_services_return_typed_snapshots() -> None:
     """The runtime service should return rich typed agent snapshot DTOs, not raw dicts."""
 
@@ -169,6 +198,212 @@ def test_runtime_auxiliary_services_return_typed_endpoint_contracts() -> None:
         assert isinstance(inspect_agent, AgentInspectResponse)
         assert reflection.agent_id == "agent-1"
         assert inspect_agent.agent.agent_id == "agent-1"
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_and_recent_reflections_expose_workflow_audit_fields() -> None:
+    """Forced reflection should surface staged audit details through runtime responses."""
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+
+        reflection = await runtime.force_reflect("agent-1")
+        recent = await runtime.get_recent_reflections()
+
+        assert isinstance(reflection, ForceReflectResponse)
+        assert isinstance(recent, ReflectionRunsResponse)
+        assert reflection.completed_stages[-2:] == ["persist_updates", "emit_planner_hints"]
+        assert reflection.failure_stage is None
+        assert reflection.validation_errors == []
+        assert recent.reflections[-1].agent_id == "agent-1"
+        assert recent.reflections[-1].completed_stages == reflection.completed_stages
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_surfaces_validation_failures_without_planner_hints() -> None:
+    """Validation failures should be reported through force-reflect audit fields."""
+
+    class InvalidReflectionWorkflow(ReflectionWorkflow):
+        def run(self, agent: AgentState, context: ReflectionContext) -> ReflectionResult:
+            return ReflectionResult(
+                goals=[""],
+                beliefs=["invalid"],
+                memory_entries=["invalid"],
+                planner_hints=["rest_soon"],
+            )
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+        runtime._slow_loop_service._reflection_workflow = InvalidReflectionWorkflow()
+
+        reflection = await runtime.force_reflect("agent-1")
+        recent = await runtime.get_recent_reflections()
+
+        assert reflection.applied is False
+        assert reflection.planner_hints == []
+        assert reflection.failure_stage == "validate"
+        assert reflection.validation_errors
+        assert recent.reflections[-1].failure_stage == "validate"
+        assert recent.reflections[-1].applied is False
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_accepts_persistent_relationship_ids_in_reflection_output() -> None:
+    """Persistence-backed relationship UUIDs should not cause reflection validation failure."""
+
+    async def run_test() -> None:
+        import_models()
+        engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+        @sqlalchemy_event.listens_for(engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        @contextmanager
+        def session_scope():
+            session: Session = session_factory()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
+        bootstrap = session_factory()
+        repository = AgentRepository(bootstrap)
+        actor = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="A",
+                sex=AgentSex.FEMALE,
+                birth_tick=0,
+                current_tile_x=1,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+                biography_summary="A keeps a careful village journal.",
+            )
+        )
+        related = repository.create_agent_bundle(
+            AgentCreateParams(
+                name="B",
+                sex=AgentSex.MALE,
+                birth_tick=0,
+                current_tile_x=2,
+                current_tile_y=1,
+                stage_of_life=StageOfLife.ADULT,
+            )
+        )
+        repository.create_goal(
+            GoalCreateParams(
+                agent_id=actor.id,
+                goal_type=GoalType.WEALTH,
+                title="Store grain before winter",
+                priority=2.5,
+                horizon_days=4,
+                status=GoalStatus.ACTIVE,
+                source=GoalSource.REFLECTION,
+                created_tick=10,
+                updated_tick=10,
+            )
+        )
+        repository.create_relationship(
+            RelationshipCreateParams(
+                source_agent_id=actor.id,
+                target_agent_id=related.id,
+                trust=0.8,
+                admiration=0.4,
+                familiarity=0.3,
+                last_interaction_tick=8,
+            )
+        )
+        bootstrap.commit()
+        bootstrap.close()
+
+        runtime = SimulationRuntime(
+            initial_state=WorldState(
+                width=4,
+                height=3,
+                day_index=100,
+                tiles=[TileState(x=x, y=y, terrain=TerrainType.GRASS) for y in range(3) for x in range(4)],
+                agents=[
+                    AgentState(agent_id="agent-1", name="A", x=1, y=1),
+                    AgentState(agent_id="agent-2", name="B", x=2, y=1),
+                ],
+            ),
+            tick_interval_seconds=60.0,
+            world_event_session_scope=session_scope,
+            persistent_agent_id_resolver=lambda agent_id: {
+                "agent-1": actor.id,
+                "agent-2": related.id,
+            }.get(agent_id),
+        )
+
+        reflection = await runtime.force_reflect("agent-1")
+
+        assert reflection.applied is True
+        assert reflection.failure_stage is None
+        assert reflection.validation_errors == []
+        assert "keep_routine" in reflection.planner_hints
+        assert any(
+            belief == f"agent:{related.id}:is_part_of_my_support_network:yes"
+            for belief in runtime._world_state.agent_by_id("agent-1").beliefs
+        )
+
+        engine.dispose()
+
+    asyncio.run(run_test())
+
+
+def test_runtime_force_reflect_accepts_existing_fast_loop_hints_from_valid_output() -> None:
+    """Reflection output using eat_soon/drink_soon should remain valid and reach planner hints."""
+
+    class HintLLMClient:
+        def generate(self, prompt: str, **_: object) -> str:
+            del prompt
+            return ReflectionOutput(
+                summary="Recover and replenish.",
+                mood_delta={"morale": 0.5},
+                belief_updates=[
+                    {
+                        "subject_type": "agent",
+                        "subject_id": "agent-1",
+                        "predicate": "can_improve_outcomes_by_adapting_routines",
+                        "object_value": "yes",
+                        "confidence_delta": 0.1,
+                    }
+                ],
+                goal_updates=[
+                    {
+                        "action": "create",
+                        "goal_type": "safety",
+                        "title": "Recover before taking risks",
+                        "priority": 0.8,
+                        "horizon_days": 1,
+                    }
+                ],
+                memory_candidates=[{"text": "I should recover.", "salience": 0.7, "valence": 0.1}],
+                tomorrow_intentions=["eat_soon", "drink_soon"],
+            ).model_dump_json()
+
+    async def run_test() -> None:
+        runtime = _build_runtime()
+        runtime._slow_loop_service._reflection_workflow = ReflectionWorkflow(llm_client=HintLLMClient())
+
+        reflection = await runtime.force_reflect("agent-1")
+
+        assert reflection.applied is True
+        assert reflection.failure_stage is None
+        assert reflection.planner_hints == ["eat_soon", "drink_soon"]
+        assert runtime._world_state.agent_by_id("agent-1").pending_planner_hints == ["eat_soon", "drink_soon"]
 
     asyncio.run(run_test())
 

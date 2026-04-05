@@ -357,6 +357,7 @@ def test_slow_loop_applies_retrieval_enriched_reflection_outputs(
 ) -> None:
     """Retrieved goals and memories should meaningfully affect applied slow-loop outputs."""
 
+    simple_world.agents.append(AgentState(agent_id="agent-2", name="Villager 2", x=2, y=1))
     retrieval_service = SpyRetrievalContextService(
         result=RetrievalContextResult(
             summary="Persistent biography summary.",

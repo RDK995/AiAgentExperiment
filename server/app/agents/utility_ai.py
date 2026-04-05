@@ -38,30 +38,63 @@ class UtilityAI:
         return UtilityAI().score_actions(agent, context)[0]
 
     def score_drink(self, agent: AgentState, perception: PerceptionResult) -> float:
-        return agent.thirst * 1.8 + (0.5 if perception.nearby_water else -0.4) + self._hint_score(agent, "drink_soon")
+        return (
+            agent.thirst * 1.8
+            + (0.5 if perception.nearby_water else -0.4)
+            + self._hint_score(agent, "drink_soon")
+            + self._hint_score(agent, "focus_on_recovery", weight=7.0)
+        )
 
     def score_eat(self, agent: AgentState, perception: PerceptionResult) -> float:
-        return agent.hunger * 1.6 + (0.4 if perception.nearby_food else -0.3) + self._hint_score(agent, "eat_soon")
+        return (
+            agent.hunger * 1.6
+            + (0.4 if perception.nearby_food else -0.3)
+            + self._hint_score(agent, "eat_soon")
+            + self._hint_score(agent, "focus_on_recovery", weight=5.0)
+            + self._hint_score(agent, "prioritize_food_security", weight=9.0)
+        )
 
     def score_rest(self, agent: AgentState, perception: PerceptionResult) -> float:
         bed_bonus = 0.8 if perception.nearby_bed else 0.0
-        return agent.fatigue * 1.4 + bed_bonus + self._hint_score(agent, "rest_soon")
+        return (
+            agent.fatigue * 1.4
+            + bed_bonus
+            + self._hint_score(agent, "rest_soon")
+            + self._hint_score(agent, "focus_on_recovery", weight=12.0)
+        )
 
     def score_gather_food(self, agent: AgentState, perception: PerceptionResult) -> float:
-        return agent.hunger * 0.9 + (6.0 if perception.nearby_food else 1.5)
+        return (
+            agent.hunger * 0.9
+            + (6.0 if perception.nearby_food else 1.5)
+            + self._hint_score(agent, "prioritize_food_security", weight=11.0)
+            + self._hint_score(agent, "gather_resources", weight=8.0)
+        )
 
     def score_fetch_water(self, agent: AgentState, perception: PerceptionResult) -> float:
-        return agent.thirst * 0.95 + (6.0 if perception.nearby_water else 1.5)
+        return (
+            agent.thirst * 0.95
+            + (6.0 if perception.nearby_water else 1.5)
+            + self._hint_score(agent, "focus_on_recovery", weight=4.0)
+            + self._hint_score(agent, "gather_resources", weight=6.0)
+        )
 
     def score_cook(self, agent: AgentState, perception: PerceptionResult) -> float:
         return agent.hunger * 0.45 + (3.0 if "food" in perception.visible_items else 0.8)
 
     def score_socialize(self, agent: AgentState, perception: PerceptionResult) -> float:
-        return agent.loneliness * 1.1 + len(perception.visible_agents) * 2.0
+        partner_hint = self._hint_score(agent, "visit_partner", weight=9.0)
+        return agent.loneliness * 1.1 + len(perception.visible_agents) * 2.0 + partner_hint
 
     def score_court(self, agent: AgentState, perception: PerceptionResult) -> float:
         partner_bonus = 8.0 if perception.visible_partner else -1.0
-        return max(0.0, agent.hope * 0.15 + agent.loneliness * 0.3 + partner_bonus)
+        return max(
+            0.0,
+            agent.hope * 0.15
+            + agent.loneliness * 0.3
+            + partner_bonus
+            + self._hint_score(agent, "visit_partner", weight=12.0),
+        )
 
     def score_care_for_child(self, agent: AgentState, perception: PerceptionResult) -> float:
         duty_bonus = 18.0 if agent.has_infant_care_duty else 0.0
@@ -70,7 +103,12 @@ class UtilityAI:
     def score_work_field(self, agent: AgentState, perception: PerceptionResult) -> float:
         daylight_bonus = 4.0 if 6 <= perception.sim_hour < 18 else -3.0
         penalty = (agent.hunger + agent.thirst + agent.fatigue) * 0.15
-        return daylight_bonus + max(0.0, 8.0 - penalty)
+        return (
+            daylight_bonus
+            + max(0.0, 8.0 - penalty)
+            + self._hint_score(agent, "gather_resources", weight=9.0)
+            + self._hint_score(agent, "prioritize_food_security", weight=4.0)
+        )
 
     def score_wander(self, agent: AgentState, perception: PerceptionResult) -> float:
         curiosity_bonus = 10.0 if "reflect_on_failures" in agent.pending_planner_hints else 0.0
@@ -83,5 +121,5 @@ class UtilityAI:
         return max(0.0, 40.0 - agent.safety) * 0.2
 
     @staticmethod
-    def _hint_score(agent: AgentState, hint: str) -> float:
-        return 12.0 if hint in agent.pending_planner_hints else 0.0
+    def _hint_score(agent: AgentState, hint: str, *, weight: float = 12.0) -> float:
+        return weight if hint in agent.pending_planner_hints else 0.0

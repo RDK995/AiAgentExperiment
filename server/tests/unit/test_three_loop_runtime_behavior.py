@@ -169,6 +169,27 @@ def test_day_rollover_triggers_slow_loop_eligibility(simple_world: WorldState) -
     assert slow_loop.last_results[0].trigger_reasons == ["day_rollover"]
 
 
+def test_major_event_trigger_rule_is_consumed_through_runtime_tick(simple_world: WorldState) -> None:
+    """A queued major event should trigger slow-loop reflection on the next live tick."""
+
+    import asyncio
+
+    async def run_test() -> None:
+        runtime = SimulationRuntime(initial_state=simple_world, tick_interval_seconds=60.0)
+
+        await runtime.emit_simulation_event(
+            EventType.MAJOR_LIFE_EVENT,
+            agent_id="agent-1",
+            payload={"kind": "bereavement"},
+        )
+        await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        assert debug_state["last_slow_loop_results"][0]["trigger_reasons"] == ["major_life_event"]
+
+    asyncio.run(run_test())
+
+
 def test_reflection_output_is_validated_before_application(simple_world: WorldState) -> None:
     """Invalid reflection output should be rejected before mutating agent state."""
 
@@ -212,6 +233,23 @@ def test_reflection_output_is_validated_before_application(simple_world: WorldSt
     assert simple_world.agents[0].current_goal == "Maintain daily routine"
     assert simple_world.agents[0].beliefs == []
     assert simple_world.agents[0].memories == []
+
+
+def test_severe_hunger_or_injury_trigger_rule_is_consumed_through_runtime_tick(simple_world: WorldState) -> None:
+    """Severe hunger or injury should trigger reflection through the normal tick path."""
+
+    import asyncio
+
+    async def run_test() -> None:
+        simple_world.agents[0].health = 20.0
+        runtime = SimulationRuntime(initial_state=simple_world, tick_interval_seconds=60.0)
+
+        await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        assert "severe_hunger_or_injury" in debug_state["last_slow_loop_results"][0]["trigger_reasons"]
+
+    asyncio.run(run_test())
 
 
 def test_social_milestone_event_triggers_slow_loop(simple_world: WorldState) -> None:
@@ -286,6 +324,27 @@ def test_planner_hints_are_consumed_after_guiding_action(simple_world: WorldStat
     assert trace.selected_action == "rest"
     assert trace.planner_hints_before == ["rest_soon"]
     assert trace.planner_hints_after == []
+
+
+def test_recovery_and_food_security_hints_are_consumed_after_guiding_actions(simple_world: WorldState) -> None:
+    """Reflection-generated recovery/resource hints should influence and then leave the queue."""
+
+    simple_world.agents[0].pending_planner_hints = ["focus_on_recovery", "prioritize_food_security"]
+    simple_world.agents[0].fatigue = 82.0
+    runtime, _, _, _ = _build_runtime_components(simple_world)
+    tick = SimTick(
+        tick=1,
+        at=datetime(2000, 1, 1, 6, 1, tzinfo=timezone.utc),
+        previous_day_index=1,
+        day_index=1,
+    )
+
+    runtime.step_all(simple_world, tick, EventBus())
+
+    trace = runtime.last_step_traces[0]
+    assert trace.selected_action == "rest"
+    assert trace.planner_hints_before == ["focus_on_recovery", "prioritize_food_security"]
+    assert trace.planner_hints_after == ["prioritize_food_security"]
 
 
 def test_fast_loop_trace_records_perception_candidates_plans_and_events(simple_world: WorldState) -> None:

@@ -10,12 +10,15 @@ const PresentationSnapshotProjector := preload("res://scripts/presentation/prese
 var _seed_definition: Dictionary = {}
 var _snapshot: Dictionary = {}
 var _recent_events: Array = []
+var _debug_metrics: Dictionary = {}
 var _selected_agent_id: String = ""
 
 
 func _ready() -> void:
 	transport.seed_definition_received.connect(_on_seed_definition_received)
 	transport.snapshot_batch_received.connect(_on_snapshot_batch_received)
+	if transport.has_signal("debug_metrics_received"):
+		transport.debug_metrics_received.connect(_on_debug_metrics_received)
 	transport.transport_warning.connect(_on_transport_warning)
 	if transport.has_signal("transport_status_changed"):
 		transport.transport_status_changed.connect(_on_transport_status_changed)
@@ -32,7 +35,7 @@ func _on_seed_definition_received(seed_definition: Dictionary) -> void:
 
 	_seed_definition = PresentationSnapshotProjector.project_seed_definition(seed_definition)
 	world_root.apply_seed_definition(_seed_definition)
-	hud.bind_world_state(_snapshot, _seed_definition, _recent_events)
+	hud.bind_world_state(_snapshot, _seed_definition, _recent_events, _debug_metrics)
 	_refresh_selected_agent()
 
 
@@ -46,8 +49,15 @@ func _on_snapshot_batch_received(snapshot: Dictionary, events: Array) -> void:
 	_snapshot = PresentationSnapshotProjector.project(snapshot)
 	_recent_events = events.duplicate(true)
 	world_root.apply_snapshot(_snapshot)
-	hud.bind_world_state(_snapshot, _seed_definition, _recent_events)
+	hud.bind_world_state(_snapshot, _seed_definition, _recent_events, _debug_metrics)
+	if transport.has_method("request_debug_metrics"):
+		transport.call("request_debug_metrics")
 	_refresh_selected_agent()
+
+
+func _on_debug_metrics_received(metrics: Dictionary) -> void:
+	_debug_metrics = metrics.duplicate(true)
+	hud.bind_world_state(_snapshot, _seed_definition, _recent_events, _debug_metrics)
 
 
 func _on_transport_warning(message: String) -> void:

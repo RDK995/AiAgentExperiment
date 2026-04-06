@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.agent import AgentSnapshot, AgentStateSnapshot
 from app.schemas.event import WorldEventSchema
+from app.schemas.metrics import DailyMetricsSnapshot
 
 NonEmptyShortText = Annotated[str, Field(min_length=1, max_length=120, pattern=r".*\S.*")]
 NonEmptyQueryText = Annotated[str, Field(min_length=1, max_length=240, pattern=r".*\S.*")]
@@ -348,6 +349,18 @@ class DebugMetricsResponse(BaseModel):
     last_tick_event_count: int = Field(ge=0)
     last_tick_event_types: list[str]
     last_tick_event_type_counts: dict[str, int]
+    latest_daily_metrics: DailyMetricsSnapshot | None = None
+    recent_daily_metrics: list[DailyMetricsSnapshot] = Field(default_factory=list)
+
+
+class DailyMetricsDebugResponse(BaseModel):
+    """Compact daily metrics debug response for dashboards and debug clients."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current: DailyMetricsSnapshot | None = None
+    latest: DailyMetricsSnapshot | None = None
+    recent: list[DailyMetricsSnapshot] = Field(default_factory=list)
 
 
 class ReplayEventResponse(BaseModel):

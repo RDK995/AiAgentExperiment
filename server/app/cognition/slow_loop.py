@@ -31,6 +31,8 @@ class SlowLoopResult:
     failure_stage: str | None = None
     validation_errors: list[str] = field(default_factory=list)
     completed_stages: list[str] = field(default_factory=list)
+    retrieved_memory_count: int = 0
+    token_cost: float = 0.0
 
 
 class SlowLoopService:
@@ -102,12 +104,14 @@ class SlowLoopService:
                 agent,
                 query_text=self._build_query_text(agent, trigger_reasons),
             )
+            retrieved_memory_count = len(retrieved_context.memories)
             recent_events = [memory.raw_text for memory in retrieved_context.memories]
             autobiography = retrieved_context.summary
             goals = [goal.title for goal in retrieved_context.goals]
             relationships = [relationship.related_agent_id for relationship in retrieved_context.relationships]
         else:
             recent_events = self._memory_retriever.retrieve_recent_events(agent)
+            retrieved_memory_count = len(recent_events)
             autobiography = self._autobiography_builder.build(agent, recent_events)
             goals = []
             relationships = []
@@ -137,6 +141,8 @@ class SlowLoopService:
                     failure_stage=execution.failure_stage,
                     validation_errors=list(execution.validation_errors),
                     completed_stages=list(execution.completed_stages),
+                    retrieved_memory_count=retrieved_memory_count,
+                    token_cost=0.0,
                 )
             validated_result = execution.result
             completed_stages = list(execution.completed_stages)
@@ -158,6 +164,8 @@ class SlowLoopService:
                         "call_model",
                         "parse_json",
                     ],
+                    retrieved_memory_count=retrieved_memory_count,
+                    token_cost=0.0,
                 )
 
             self._goal_updater.apply(agent, validated_result.goals)
@@ -194,6 +202,8 @@ class SlowLoopService:
             applied=True,
             planner_hints=list(validated_result.planner_hints),
             completed_stages=completed_stages,
+            retrieved_memory_count=retrieved_memory_count,
+            token_cost=0.0,
         )
 
     @staticmethod

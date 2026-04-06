@@ -24,6 +24,7 @@ func _run_checks() -> void:
 	_check_projection_handles_missing_optional_agent_fields()
 	_check_seed_projection_keeps_households_and_social_links()
 	_check_projection_discards_agents_without_positions()
+	_check_village_dashboard_binds_authoritative_daily_metrics()
 	_check_visual_interpolation_does_not_mutate_authoritative_positions()
 	_check_main_scene_structure_loads()
 
@@ -230,6 +231,16 @@ func _check_visual_interpolation_does_not_mutate_authoritative_positions() -> vo
 	)
 
 
+func _check_village_dashboard_binds_authoritative_daily_metrics() -> void:
+	var dashboard_scene := load("res://scenes/ui/VillageDashboard.tscn")
+	var dashboard := dashboard_scene.instantiate()
+	dashboard.call("bind_data", _sample_snapshot(), _sample_seed_definition(), [], _sample_debug_metrics())
+	var stats_label: Label = dashboard.get_node("Margin/VBox/Stats")
+	assert(stats_label.text.contains("Food 18"), "Dashboard should render authoritative food reserves from debug metrics.")
+	assert(stats_label.text.contains("Reflections/day 2"), "Dashboard should render cognition metrics from the backend.")
+	dashboard.queue_free()
+
+
 func _check_main_scene_structure_loads() -> void:
 	var main_scene := load("res://scenes/Main.tscn")
 	var instance := main_scene.instantiate()
@@ -305,4 +316,48 @@ func _sample_seed_definition() -> Dictionary:
 		"social_links": [
 			{"kind": "bonded_pair", "agent_ids": ["agent-1", "agent-2"]}
 		]
+	}
+
+
+func _sample_debug_metrics() -> Dictionary:
+	return {
+		"latest": {
+			"day_index": 730121,
+			"finalized_at": "2026-04-06T00:00:00Z",
+			"population": {
+				"total_population": 20,
+				"births": 1,
+				"deaths": 0,
+				"infant_survival_rate": 1.0,
+				"age_distribution": {"adult": 12, "adolescent": 4, "child": 3, "infant": 1}
+			},
+			"welfare": {
+				"average_hunger": 4.5,
+				"average_thirst": 3.0,
+				"average_stress": 2.5,
+				"starvation_count": 0,
+				"illness_count": null
+			},
+			"social": {
+				"active_bonds": 2,
+				"household_count": 4,
+				"mean_trust": 0.58,
+				"conflict_events": 1,
+				"gifts_per_day": 3
+			},
+			"economy": {
+				"food_reserves": 18,
+				"water_reserves": 9,
+				"crop_yield": 2,
+				"wood_stock": 7,
+				"cooked_meals_per_day": 4
+			},
+			"cognition": {
+				"reflections_per_day": 2,
+				"average_memories_retrieved": 5.0,
+				"invalid_model_outputs": 0,
+				"mean_token_cost_per_day": 0.0
+			}
+		},
+		"recent": []
 	}

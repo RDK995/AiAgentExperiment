@@ -7,6 +7,7 @@ from app.api.dependencies import get_runtime
 from app.engine.tick_loop import SimulationRuntime
 from app.schemas.api import (
     AgentInspectResponse,
+    DailyMetricsDebugResponse,
     DebugMetricsResponse,
     HouseholdInspectResponse,
     ReflectionRunsResponse,
@@ -21,6 +22,16 @@ async def get_metrics(runtime: SimulationRuntime = Depends(get_runtime)) -> Debu
     """Return high-level runtime metrics for debugging."""
 
     return await runtime.get_debug_metrics()
+
+
+@router.get("/metrics/daily", response_model=DailyMetricsDebugResponse)
+async def get_daily_metrics(
+    limit: int = Query(default=7, ge=1, le=30),
+    runtime: SimulationRuntime = Depends(get_runtime),
+) -> DailyMetricsDebugResponse:
+    """Return latest and recent finalized daily metrics for dashboard/debug consumers."""
+
+    return await runtime.get_daily_metrics_debug(limit=limit)
 
 
 @router.get("/replay", response_model=ReplayResponse)

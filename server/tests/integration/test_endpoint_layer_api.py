@@ -10,6 +10,7 @@ from app.schemas.api import (
     AgentListResponse,
     AgentInspectResponse,
     ChunkResponse,
+    DailyMetricsDebugResponse,
     DebugMetricsResponse,
     EpisodesResponse,
     ForceReflectResponse,
@@ -54,6 +55,7 @@ def test_app_registers_new_endpoint_groups(client: TestClient) -> None:
     assert "/api/v1/memory/{agent_id}/retrieve" in route_paths
     assert "/api/v1/memory/{agent_id}/summarize" in route_paths
     assert "/api/v1/debug/metrics" in route_paths
+    assert "/api/v1/debug/metrics/daily" in route_paths
     assert "/api/v1/debug/replay" in route_paths
     assert "/api/v1/debug/reflections" in route_paths
     assert "/api/v1/debug/inspect/agent/{agent_id}" in route_paths
@@ -365,12 +367,14 @@ def test_debug_routes_return_metrics_and_inspection_payloads(client: TestClient)
 
     client.post("/api/v1/agents/agent-1/force-reflect")
     metrics = client.get("/api/v1/debug/metrics")
+    daily_metrics = client.get("/api/v1/debug/metrics/daily")
     replay = client.get("/api/v1/debug/replay")
     reflections = client.get("/api/v1/debug/reflections")
     inspect_agent = client.get("/api/v1/debug/inspect/agent/agent-1")
     inspect_household = client.get("/api/v1/debug/inspect/household/unknown-household")
 
     assert metrics.status_code == 200
+    assert daily_metrics.status_code == 200
     assert replay.status_code == 200
     assert reflections.status_code == 200
     assert inspect_agent.status_code == 200
@@ -382,10 +386,14 @@ def test_debug_routes_return_metrics_and_inspection_payloads(client: TestClient)
         "total_recorded_ticks",
         "last_tick_event_types",
         "last_tick_event_type_counts",
+        "latest_daily_metrics",
+        "recent_daily_metrics",
     } <= set(metrics.json())
+    assert {"current", "latest", "recent"} == set(daily_metrics.json())
     assert isinstance(replay.json()["events"], list)
     assert inspect_agent.json()["agent"]["agent_id"] == "agent-1"
     assert isinstance(DebugMetricsResponse.model_validate(metrics.json()), DebugMetricsResponse)
+    assert isinstance(DailyMetricsDebugResponse.model_validate(daily_metrics.json()), DailyMetricsDebugResponse)
     assert isinstance(ReplayResponse.model_validate(replay.json()), ReplayResponse)
     assert isinstance(ReflectionRunsResponse.model_validate(reflections.json()), ReflectionRunsResponse)
     assert isinstance(AgentInspectResponse.model_validate(inspect_agent.json()), AgentInspectResponse)
@@ -393,6 +401,37 @@ def test_debug_routes_return_metrics_and_inspection_payloads(client: TestClient)
         "error": "not_found",
         "message": "Unknown household 'unknown-household'.",
     }
+
+
+def test_debug_daily_metrics_route_exposes_finalized_history_after_rollover(client: TestClient) -> None:
+    """The daily debug metrics route should expose the latest finalized day plus recent history."""
+
+    client.post("/api/v1/admin/reset-world")
+    client.post("/api/v1/admin/advance-days/1")
+
+    response = client.get("/api/v1/debug/metrics/daily?limit=3")
+
+    assert response.status_code == 200
+    payload = DailyMetricsDebugResponse.model_validate(response.json())
+    assert payload.current is not None
+    assert payload.latest is not None
+    assert payload.recent
+    assert payload.recent[-1].day_index == payload.latest.day_index
+
+
+def test_debug_daily_metrics_route_exposes_current_preview_before_first_rollover(client: TestClient) -> None:
+    """The daily debug metrics route should expose an in-progress day preview before finalization."""
+
+    client.post("/api/v1/admin/reset-world")
+
+    response = client.get("/api/v1/debug/metrics/daily?limit=3")
+
+    assert response.status_code == 200
+    payload = DailyMetricsDebugResponse.model_validate(response.json())
+    assert payload.current is not None
+    assert payload.latest is None
+    assert payload.recent == []
+    assert payload.current.population.total_population >= 1
 
 
 def test_debug_inspect_agent_returns_clean_not_found_for_missing_agent(client: TestClient) -> None:

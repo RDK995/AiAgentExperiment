@@ -222,9 +222,8 @@ class ActionExecutor:
                 return self._fail_task(event_bus, tick, now, agent, task, events)
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
         if task.task_type is TaskType.FISH:
-            if not self._can_fish(world, agent):
+            if not self._fish(world, agent):
                 return self._fail_task(event_bus, tick, now, agent, task, events)
-            agent.inventory["fish"] = agent.inventory.get("fish", 0) + 1
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
         if task.task_type is TaskType.GATHER_FOOD:
             food_source_empty = {"value": False}
@@ -416,11 +415,13 @@ class ActionExecutor:
                 or self._bonding_service is None
             ):
                 return self._fail_task(event_bus, tick, now, agent, task, events)
+            relationship_ab = self._resolve_relationship_metrics(agent, target, task, direction="forward")
+            relationship_ba = self._resolve_relationship_metrics(agent, target, task, direction="reverse")
             result = self._bonding_service.attempt_bond(
                 agent,
                 target,
-                RelationshipMetrics(familiarity=0.8, trust=0.7, attraction=0.8, admiration=0.5),
-                RelationshipMetrics(familiarity=0.8, trust=0.7, attraction=0.8, admiration=0.5),
+                relationship_ab,
+                relationship_ba,
                 world=world,
                 tick=tick,
                 now=now,
@@ -785,13 +786,76 @@ class ActionExecutor:
     def _share_food_home(world: WorldState, agent: AgentState) -> bool:
         if not ActionExecutor._consume_inventory_item(agent, {"meal", "food", "berries", "fish"}):
             return False
-        shared = False
-        for other in world.agents:
-            if other.agent_id == agent.agent_id or other.household_id != agent.household_id:
-                continue
-            other.hunger = max(0.0, other.hunger - 4.0)
-            shared = True
-        return shared
+        recipients = [
+            other
+            for other in world.agents
+            if other.agent_id != agent.agent_id and other.household_id == agent.household_id
+        ]
+        if not recipients:
+            return False
+        recipient = max(recipients, key=lambda other: (other.hunger, other.agent_id))
+        recipient.hunger = max(0.0, recipient.hunger - 4.0)
+        return True
+
+    def _fish(self, world: WorldState, agent: AgentState) -> bool:
+        if self._gather_resource(world, agent, {"fish"}, inventory_item="fish"):
+            return True
+        if not self._has_water_access(world, agent):
+            return False
+        agent.inventory["fish"] = agent.inventory.get("fish", 0) + 1
+        return True
+
+    def _has_water_access(self, world: WorldState, agent: AgentState) -> bool:
+        if any(
+            resource.resource_type == "water" and (resource.x, resource.y) == (agent.x, agent.y)
+            for resource in world.resources
+        ):
+            return True
+        if world.terrain_at(agent.x, agent.y) == "water":
+            return True
+        for delta_x, delta_y in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            if world.terrain_at(agent.x + delta_x, agent.y + delta_y) == "water":
+                return True
+        return False
+
+    def _resolve_relationship_metrics(
+        self,
+        agent: AgentState,
+        target: AgentState,
+        task: PlannedTask,
+        *,
+        direction: str,
+    ) -> RelationshipMetrics | None:
+        metadata_key = "relationship" if direction == "forward" else "reciprocal_relationship"
+        relationship_value = task.metadata.get(metadata_key)
+        if isinstance(relationship_value, dict):
+            return self._relationship_metrics_from_dict(relationship_value)
+        if self._bonding_service is None:
+            return None
+        return self._bonding_service.get_relationship_metrics(
+            agent.agent_id if direction == "forward" else target.agent_id,
+            target.agent_id if direction == "forward" else agent.agent_id,
+        )
+
+    @staticmethod
+    def _relationship_metrics_from_dict(data: dict[str, object]) -> RelationshipMetrics | None:
+        try:
+            familiarity = float(data["familiarity"])
+            trust = float(data["trust"])
+            attraction = float(data["attraction"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        admiration_value = data.get("admiration", 0.0)
+        try:
+            admiration = float(admiration_value)
+        except (TypeError, ValueError):
+            admiration = 0.0
+        return RelationshipMetrics(
+            familiarity=familiarity,
+            trust=trust,
+            attraction=attraction,
+            admiration=admiration,
+        )
 
     def _emit_action_executed(
         self,

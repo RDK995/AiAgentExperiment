@@ -300,6 +300,11 @@ class BondingService:
 
         return events
 
+    def get_relationship_metrics(self, source_agent_id: str, target_agent_id: str) -> RelationshipMetrics | None:
+        """Load persisted relationship metrics for a directed pair when available."""
+
+        return self._load_relationship_metrics(source_agent_id, target_agent_id)
+
     @staticmethod
     def _has_social_opportunity(agent_a: AgentState, agent_b: AgentState, world: WorldState) -> bool:
         distance = abs(agent_a.x - agent_b.x) + abs(agent_a.y - agent_b.y)

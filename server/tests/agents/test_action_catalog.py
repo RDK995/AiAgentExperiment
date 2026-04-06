@@ -174,11 +174,16 @@ def test_work_actions_update_inventory_and_world_resources() -> None:
     )
 
     assert agent.inventory["berries"] >= 1
-    assert agent.inventory["fish"] >= 1
     assert agent.inventory["crop"] >= 1
     assert agent.inventory["meal"] >= 1
     assert agent.home_inventory == {}
     assert any(resource.resource_type == "field" for resource in world.resources)
+    fish_resources = [
+        resource
+        for resource in world.resources
+        if resource.resource_type == "fish" and (resource.x, resource.y) == (2, 1)
+    ]
+    assert fish_resources[0].quantity == 0
 
 
 def test_social_actions_transfer_items_emit_events_and_form_bonds() -> None:
@@ -220,7 +225,26 @@ def test_social_actions_transfer_items_emit_events_and_form_bonds() -> None:
         actor,
         SelectedAction(
             action_type=ActionType.PROPOSE_BOND,
-            tasks=[PlannedTask(TaskType.PROPOSE_BOND, metadata={"target_agent_id": "agent-2"})],
+            tasks=[
+                PlannedTask(
+                    TaskType.PROPOSE_BOND,
+                    metadata={
+                        "target_agent_id": "agent-2",
+                        "relationship": {
+                            "familiarity": 0.8,
+                            "trust": 0.7,
+                            "attraction": 0.8,
+                            "admiration": 0.5,
+                        },
+                        "reciprocal_relationship": {
+                            "familiarity": 0.8,
+                            "trust": 0.7,
+                            "attraction": 0.8,
+                            "admiration": 0.5,
+                        },
+                    },
+                )
+            ],
         ),
         tick=3,
         now=now,
@@ -235,6 +259,32 @@ def test_social_actions_transfer_items_emit_events_and_form_bonds() -> None:
     assert target.partner_id == "agent-1"
     assert any(event.type is EventType.PROPOSAL_MADE for event in bond_events)
     assert any(event.type is EventType.PROPOSAL_ACCEPTED for event in bond_events)
+
+
+def test_propose_bond_fails_safely_without_real_relationship_metrics() -> None:
+    """Bond proposals should not fabricate strong relationships when none are provided or persisted."""
+
+    world = _make_social_world()
+    actor = world.agent_by_id("agent-1")
+    target = world.agent_by_id("agent-2")
+    assert actor is not None and target is not None
+
+    events = ActionExecutor(bonding_service=BondingService()).execute(
+        world,
+        actor,
+        SelectedAction(
+            action_type=ActionType.PROPOSE_BOND,
+            tasks=[PlannedTask(TaskType.PROPOSE_BOND, metadata={"target_agent_id": "agent-2"})],
+        ),
+        tick=1,
+        now=_now(),
+        event_bus=EventBus(),
+    )
+
+    assert actor.partner_id is None
+    assert target.partner_id is None
+    assert any(event.type is EventType.PLAN_FAILED for event in events)
+    assert not any(event.type is EventType.PROPOSAL_ACCEPTED for event in events)
 
 
 def test_social_action_legality_blocks_distant_targets_without_corrupting_state() -> None:
@@ -273,7 +323,9 @@ def test_family_actions_support_infants_children_and_household_food_sharing() ->
     infant = world.agent_by_id("infant-1")
     child = world.agent_by_id("child-1")
     sibling = world.agent_by_id("agent-2")
+    hungrier_sibling = world.agent_by_id("agent-3")
     assert parent is not None and infant is not None and child is not None and sibling is not None
+    assert hungrier_sibling is not None
     parent.inventory["food"] = 1
     executor = ActionExecutor()
 
@@ -308,10 +360,11 @@ def test_family_actions_support_infants_children_and_household_food_sharing() ->
         event_bus=EventBus(),
     )
 
-    assert infant.hunger == 12.0
+    assert infant.hunger == 16.0
     assert infant.fatigue == 12.0
     assert child.skills["foraging"] == 0.5
-    assert sibling.hunger == 26.0
+    assert sibling.hunger == 30.0
+    assert hungrier_sibling.hunger == 36.0
     assert "food" not in parent.inventory
 
 
@@ -350,6 +403,7 @@ def _make_family_world() -> WorldState:
         agents=[
             AgentState(agent_id="agent-1", name="Parent", x=1, y=1, household_id="house-1", stress=10.0),
             AgentState(agent_id="agent-2", name="Sibling", x=1, y=2, household_id="house-1", hunger=30.0),
+            AgentState(agent_id="agent-3", name="HungrySibling", x=2, y=1, household_id="house-1", hunger=40.0),
             AgentState(
                 agent_id="infant-1",
                 name="Infant",

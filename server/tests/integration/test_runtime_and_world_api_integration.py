@@ -246,6 +246,39 @@ def test_runtime_day_rollover_finalizes_daily_metrics_and_exposes_them_through_d
     asyncio.run(run_test())
 
 
+def test_admin_advance_days_is_an_explicit_clock_jump_and_does_not_run_fast_loop_subsystems() -> None:
+    """Admin day advancement should jump clock/day state without executing agent actions."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=3,
+            height=3,
+            current_time=datetime(2000, 1, 1, 6, 0, tzinfo=timezone.utc),
+            day_index=datetime(2000, 1, 1, 6, 0, tzinfo=timezone.utc).toordinal(),
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(3) for x in range(3)],
+            agents=[AgentState(agent_id="agent-1", name="A", x=1, y=1, thirst=90.0)],
+            resources=[ResourceNodeState(resource_type="water", x=1, y=1, quantity=2)],
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        before_snapshot = await runtime.get_snapshot()
+        response = await runtime.advance_days(1)
+        after_snapshot = await runtime.get_snapshot()
+        recent_events = await runtime.get_recent_world_events(limit=10)
+        debug_state = await runtime.get_debug_state()
+
+        assert response.advance_mode == "clock_jump"
+        assert response.simulation_progressed is False
+        assert after_snapshot.tick == before_snapshot.tick + 24
+        assert after_snapshot.agents[0].needs.thirst == before_snapshot.agents[0].needs.thirst
+        assert after_snapshot.agents[0].current_action == before_snapshot.agents[0].current_action == "idle"
+        assert "agent_drank" not in {event.event_type for event in recent_events}
+        assert recent_events == []
+        assert debug_state["last_fast_loop_traces"] == []
+
+    asyncio.run(run_test())
+
+
 def test_runtime_bonded_pair_progresses_from_conception_to_birth_through_lifecycle() -> None:
     """Bonded adult partners should conceive and produce a child through the normal runtime tick path."""
 

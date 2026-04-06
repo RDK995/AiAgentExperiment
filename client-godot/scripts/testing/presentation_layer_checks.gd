@@ -3,6 +3,7 @@ extends SceneTree
 const PresentationBoundaryValidator := preload("res://scripts/validation/presentation_boundary_validator.gd")
 const PresentationSnapshotProjector := preload("res://scripts/presentation/presentation_snapshot_projector.gd")
 const AgentVisualStateStore := preload("res://scripts/agents/agent_visual_state_store.gd")
+const WebsocketClientScript := preload("res://scripts/networking/websocket_client.gd")
 
 
 func _initialize() -> void:
@@ -25,6 +26,7 @@ func _run_checks() -> void:
 	_check_seed_projection_keeps_households_and_social_links()
 	_check_projection_discards_agents_without_positions()
 	_check_village_dashboard_binds_authoritative_daily_metrics()
+	_check_debug_metrics_requests_are_throttled()
 	_check_visual_interpolation_does_not_mutate_authoritative_positions()
 	_check_main_scene_structure_loads()
 
@@ -239,6 +241,22 @@ func _check_village_dashboard_binds_authoritative_daily_metrics() -> void:
 	assert(stats_label.text.contains("Food 18"), "Dashboard should render authoritative food reserves from debug metrics.")
 	assert(stats_label.text.contains("Reflections/day 2"), "Dashboard should render cognition metrics from the backend.")
 	dashboard.queue_free()
+
+
+func _check_debug_metrics_requests_are_throttled() -> void:
+	var transport := WebsocketClientScript.new()
+	transport.debug_metrics_poll_interval_seconds = 5.0
+	transport._last_debug_metrics_request_time_msec = Time.get_ticks_msec()
+	assert(
+		not transport.call("_can_request_debug_metrics"),
+		"Debug metrics requests should be throttled within the configured interval."
+	)
+	transport._last_debug_metrics_request_time_msec = Time.get_ticks_msec() - 6000
+	assert(
+		transport.call("_can_request_debug_metrics"),
+		"Debug metrics requests should be allowed again after the throttle window."
+	)
+	transport.free()
 
 
 func _check_main_scene_structure_loads() -> void:

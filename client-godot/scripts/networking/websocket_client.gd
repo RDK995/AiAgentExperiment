@@ -17,6 +17,7 @@ signal transport_status_changed(mode: String, detail: String)
 @export var snapshot_path: String = "/api/v1/world/snapshot"
 @export var recent_events_path: String = "/api/v1/world/events/recent?limit=20"
 @export var debug_metrics_path: String = "/api/v1/debug/metrics/daily?limit=7"
+@export var debug_metrics_poll_interval_seconds: float = 5.0
 @export var poll_interval_seconds: float = 1.0
 @export var stream_poll_seconds: float = 0.25
 @export var reconnect_interval_seconds: float = 3.0
@@ -37,6 +38,7 @@ var _fallback_active: bool = false
 var _seed_bootstrap_attempted: bool = false
 var _last_live_message_time_msec: int = 0
 var _websocket_connect_started_msec: int = 0
+var _last_debug_metrics_request_time_msec: int = 0
 
 
 func _ready() -> void:
@@ -100,9 +102,13 @@ func fetch_batch() -> void:
 func request_debug_metrics() -> void:
 	if _debug_metrics_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
 		return
+	if not _can_request_debug_metrics():
+		return
 	var error := _debug_metrics_request.request("%s%s" % [base_url, debug_metrics_path])
 	if error != OK:
 		transport_warning.emit("Failed to request debug metrics: %s" % error_string(error))
+		return
+	_last_debug_metrics_request_time_msec = Time.get_ticks_msec()
 
 
 func _start_websocket_stream() -> void:
@@ -336,6 +342,15 @@ func _connect_attempt_has_timed_out() -> bool:
 		return false
 	var elapsed_seconds := float(Time.get_ticks_msec() - _websocket_connect_started_msec) / 1000.0
 	return elapsed_seconds >= stale_stream_timeout_seconds
+
+
+func _can_request_debug_metrics() -> bool:
+	if debug_metrics_poll_interval_seconds <= 0.0:
+		return true
+	if _last_debug_metrics_request_time_msec <= 0:
+		return true
+	var elapsed_seconds := float(Time.get_ticks_msec() - _last_debug_metrics_request_time_msec) / 1000.0
+	return elapsed_seconds >= debug_metrics_poll_interval_seconds
 
 
 func _should_bootstrap_missing_seed(message: String) -> bool:

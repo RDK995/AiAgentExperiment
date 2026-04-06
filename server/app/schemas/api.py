@@ -449,7 +449,7 @@ class SpawnFoodResponse(BaseModel):
 
 
 class AdvanceDaysResponse(BaseModel):
-    """Admin response after advancing the simulation by coarse day units."""
+    """Admin response after advancing the authoritative clock by coarse day units."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -457,6 +457,8 @@ class AdvanceDaysResponse(BaseModel):
     ticks_run: int = Field(ge=1)
     final_tick: int = Field(ge=0)
     current_time: str
+    advance_mode: Literal["clock_jump"] = "clock_jump"
+    simulation_progressed: bool = False
 
 
 class ResetWorldResponse(BaseModel):

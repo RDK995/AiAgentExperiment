@@ -101,7 +101,10 @@ class SimulationRuntime:
         self._running = False
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
-        self._daily_metrics = DailyMetricsCollector(session_scope=self._world_event_session_scope)
+        self._daily_metrics = DailyMetricsCollector(
+            session_scope=self._world_event_session_scope,
+            resolve_agent_id=self._resolve_persistent_agent_id,
+        )
         self._daily_metrics.start_day(initial_state.day_index)
         self._replay_log = ReplayEventLog(max_events=200)
         self._recent_events: list[SimulationEvent] = []
@@ -579,11 +582,12 @@ class SimulationRuntime:
             )
 
     async def advance_days(self, days: int) -> AdvanceDaysResponse:
-        """Advance the simulation by coarse admin day units.
+        """Advance the authoritative clock by coarse admin day units.
 
         Admin day advancement is intentionally coarse and fast. It finalizes the
         current day metrics and advances the authoritative clock/state by whole
         days without simulating every second-granularity tick in between.
+        This method does not run normal world/agent/lifecycle subsystems.
         """
 
         async with self._lock:
@@ -622,6 +626,8 @@ class SimulationRuntime:
                 ticks_run=ticks_run,
                 final_tick=self._world_state.tick,
                 current_time=self._world_state.current_time.isoformat(),
+                advance_mode="clock_jump",
+                simulation_progressed=False,
             )
 
     async def reset_world(self) -> ResetWorldResponse:
@@ -769,7 +775,10 @@ class SimulationRuntime:
             self._current_seed_id = None
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
-        self._daily_metrics = DailyMetricsCollector(session_scope=self._world_event_session_scope)
+        self._daily_metrics = DailyMetricsCollector(
+            session_scope=self._world_event_session_scope,
+            resolve_agent_id=self._resolve_persistent_agent_id,
+        )
         self._daily_metrics.start_day(self._world_state.day_index)
         self._replay_log = ReplayEventLog(max_events=200)
         self._event_bus = self._build_event_bus()

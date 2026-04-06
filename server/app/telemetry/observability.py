@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -70,25 +71,31 @@ class DailyMetricsCollector:
         self,
         *,
         session_scope=None,
+        resolve_agent_id=None,
         history_limit: int = 30,
     ) -> None:
         self._session_scope = session_scope
+        self._resolve_agent_id = resolve_agent_id
         self._history_limit = history_limit
         self._current_day_index: int | None = None
         self._current = _DailyCounters()
         self._history: list[DailyMetricsSnapshot] = []
+        self._current_snapshot_cache_tick: int | None = None
+        self._current_snapshot_cache: DailyMetricsSnapshot | None = None
 
     def start_day(self, day_index: int) -> None:
         """Initialize the collector for the active simulation day."""
 
         if self._current_day_index is None:
             self._current_day_index = day_index
+        self._invalidate_current_snapshot_cache()
 
     def observe_event(self, event: SimulationEvent) -> None:
         """Count day-scoped domain events as they flow through the authoritative bus."""
 
         if self._current_day_index is None:
             self._current_day_index = event.sim_time.toordinal()
+        self._invalidate_current_snapshot_cache()
 
         if event.type is EventType.CHILD_BORN:
             self._current.births += 1
@@ -113,6 +120,7 @@ class DailyMetricsCollector:
             self._current_day_index = day_index
         if self._current_day_index != day_index:
             return
+        self._invalidate_current_snapshot_cache()
 
         for result in results:
             self._current.reflections_per_day += 1
@@ -147,6 +155,7 @@ class DailyMetricsCollector:
         self._history = self._history[-self._history_limit :]
         self._current = _DailyCounters()
         self._current_day_index = next_day_index
+        self._invalidate_current_snapshot_cache()
         return snapshot
 
     def latest_snapshot(self) -> DailyMetricsSnapshot | None:
@@ -165,7 +174,10 @@ class DailyMetricsCollector:
 
         if self._current_day_index is None:
             return None
-        return DailyMetricsSnapshot(
+        if self._current_snapshot_cache_tick == world.tick and self._current_snapshot_cache is not None:
+            return self._current_snapshot_cache
+
+        snapshot = DailyMetricsSnapshot(
             day_index=self._current_day_index,
             finalized_at=finalized_at,
             population=self._build_population_metrics(world),
@@ -174,6 +186,9 @@ class DailyMetricsCollector:
             economy=self._build_economy_metrics(world),
             cognition=self._build_cognition_metrics(),
         )
+        self._current_snapshot_cache_tick = world.tick
+        self._current_snapshot_cache = snapshot
+        return snapshot
 
     def recent_snapshots(self, limit: int = 7) -> list[DailyMetricsSnapshot]:
         """Return a bounded recent history of finalized daily metrics."""
@@ -243,7 +258,7 @@ class DailyMetricsCollector:
         return SocialDailyMetrics(
             active_bonds=len(active_pairs),
             household_count=household_count,
-            mean_trust=self._compute_mean_trust(),
+            mean_trust=self._compute_mean_trust(world),
             conflict_events=self._current.conflict_events,
             gifts_per_day=self._current.gifts_per_day,
         )
@@ -287,11 +302,31 @@ class DailyMetricsCollector:
     def _sum_inventory(inventory: dict[str, int], item_types: set[str]) -> int:
         return sum(quantity for item_type, quantity in inventory.items() if item_type in item_types)
 
-    def _compute_mean_trust(self) -> float | None:
-        if self._session_scope is None:
+    def _compute_mean_trust(self, world: WorldState) -> float | None:
+        if self._session_scope is None or self._resolve_agent_id is None:
             return None
+
+        active_agent_ids: set[uuid.UUID] = set()
+        for agent in world.agents:
+            if not agent.alive:
+                continue
+            persistent_id = self._resolve_agent_id(agent.agent_id)
+            if persistent_id is not None:
+                active_agent_ids.add(persistent_id)
+
+        if not active_agent_ids:
+            return None
+
         with self._session_scope() as session:
-            trust_values = list(session.scalars(select(Relationship.trust)))
+            statement = select(Relationship.trust).where(
+                Relationship.source_agent_id.in_(active_agent_ids),
+                Relationship.target_agent_id.in_(active_agent_ids),
+            )
+            trust_values = list(session.scalars(statement))
         if not trust_values:
             return None
         return round(sum(float(value) for value in trust_values) / len(trust_values), 4)
+
+    def _invalidate_current_snapshot_cache(self) -> None:
+        self._current_snapshot_cache_tick = None
+        self._current_snapshot_cache = None

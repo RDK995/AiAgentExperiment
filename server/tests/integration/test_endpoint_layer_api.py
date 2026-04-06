@@ -466,6 +466,8 @@ def test_admin_routes_reset_and_mutate_authoritative_state(client: TestClient) -
     assert spawned_agent.json()["agent"]["name"] == "Ayla"
     assert spawned_food.json()["item_type"] == "berries"
     assert advanced.json()["days_requested"] == 2
+    assert advanced.json()["advance_mode"] == "clock_jump"
+    assert advanced.json()["simulation_progressed"] is False
     assert reset.json()["status"] == "reset"
     assert isinstance(SpawnAgentResponse.model_validate(spawned_agent.json()), SpawnAgentResponse)
     assert isinstance(SpawnFoodResponse.model_validate(spawned_food.json()), SpawnFoodResponse)

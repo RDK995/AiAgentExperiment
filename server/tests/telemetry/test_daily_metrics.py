@@ -223,10 +223,24 @@ def test_daily_metrics_mean_trust_uses_persisted_relationship_rows_when_availabl
     def session_scope():
         yield session
 
-    collector = DailyMetricsCollector(session_scope=session_scope)
+    collector = DailyMetricsCollector(
+        session_scope=session_scope,
+        resolve_agent_id=lambda runtime_id: {
+            "runtime-ari": source.id,
+            "runtime-bea": target.id,
+        }.get(runtime_id),
+    )
     collector.start_day(300)
     snapshot = collector.finalize_day(
-        WorldState(width=1, height=1, day_index=300, agents=[]),
+        WorldState(
+            width=1,
+            height=1,
+            day_index=300,
+            agents=[
+                AgentState(agent_id="runtime-ari", name="Ari", x=0, y=0),
+                AgentState(agent_id="runtime-bea", name="Bea", x=0, y=0),
+            ],
+        ),
         day_index=300,
         finalized_at=datetime(2000, 1, 5, 0, 0, tzinfo=timezone.utc),
         next_day_index=301,
@@ -235,6 +249,141 @@ def test_daily_metrics_mean_trust_uses_persisted_relationship_rows_when_availabl
     assert snapshot.social.mean_trust == 0.6
     session.close()
     engine.dispose()
+
+
+def test_daily_metrics_mean_trust_ignores_relationship_rows_for_agents_outside_current_world() -> None:
+    """Mean trust should only consider persisted rows for the current runtime's active agents."""
+
+    import_models()
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    @sqlalchemy_event.listens_for(engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    repository = AgentRepository(session)
+    ari = repository.create_agent_bundle(
+        AgentCreateParams(
+            name="Ari",
+            sex=AgentSex.FEMALE,
+            birth_tick=0,
+            current_tile_x=0,
+            current_tile_y=0,
+            stage_of_life=StageOfLife.ADULT,
+        )
+    )
+    bea = repository.create_agent_bundle(
+        AgentCreateParams(
+            name="Bea",
+            sex=AgentSex.MALE,
+            birth_tick=0,
+            current_tile_x=1,
+            current_tile_y=0,
+            stage_of_life=StageOfLife.ADULT,
+        )
+    )
+    outsider = repository.create_agent_bundle(
+        AgentCreateParams(
+            name="Cara",
+            sex=AgentSex.FEMALE,
+            birth_tick=0,
+            current_tile_x=2,
+            current_tile_y=0,
+            stage_of_life=StageOfLife.ADULT,
+        )
+    )
+    repository.create_relationship(
+        RelationshipCreateParams(
+            source_agent_id=ari.id,
+            target_agent_id=bea.id,
+            trust=0.8,
+        )
+    )
+    repository.create_relationship(
+        RelationshipCreateParams(
+            source_agent_id=bea.id,
+            target_agent_id=ari.id,
+            trust=0.4,
+        )
+    )
+    repository.create_relationship(
+        RelationshipCreateParams(
+            source_agent_id=outsider.id,
+            target_agent_id=ari.id,
+            trust=0.0,
+        )
+    )
+    session.commit()
+
+    @contextmanager
+    def session_scope():
+        yield session
+
+    collector = DailyMetricsCollector(
+        session_scope=session_scope,
+        resolve_agent_id=lambda runtime_id: {
+            "runtime-ari": ari.id,
+            "runtime-bea": bea.id,
+        }.get(runtime_id),
+    )
+    collector.start_day(301)
+    snapshot = collector.finalize_day(
+        WorldState(
+            width=1,
+            height=1,
+            day_index=301,
+            agents=[
+                AgentState(agent_id="runtime-ari", name="Ari", x=0, y=0),
+                AgentState(agent_id="runtime-bea", name="Bea", x=0, y=0),
+            ],
+        ),
+        day_index=301,
+        finalized_at=datetime(2000, 1, 6, 0, 0, tzinfo=timezone.utc),
+        next_day_index=302,
+    )
+
+    assert snapshot.social.mean_trust == 0.6
+    session.close()
+    engine.dispose()
+
+
+def test_current_snapshot_reuses_cached_preview_within_the_same_tick() -> None:
+    """Repeated current-snapshot reads in one tick should reuse the cached aggregation."""
+
+    class SpyDailyMetricsCollector(DailyMetricsCollector):
+        def __init__(self) -> None:
+            super().__init__()
+            self.social_metric_calls = 0
+
+        def _build_social_metrics(self, world: WorldState):  # type: ignore[override]
+            self.social_metric_calls += 1
+            return super()._build_social_metrics(world)
+
+    collector = SpyDailyMetricsCollector()
+    collector.start_day(400)
+    world = WorldState(
+        width=2,
+        height=2,
+        tick=12,
+        day_index=400,
+        agents=[AgentState(agent_id="agent-1", name="A", x=0, y=0)],
+    )
+
+    first = collector.current_snapshot(
+        world,
+        finalized_at=datetime(2000, 1, 7, 12, 0, tzinfo=timezone.utc),
+    )
+    second = collector.current_snapshot(
+        world,
+        finalized_at=datetime(2000, 1, 7, 12, 1, tzinfo=timezone.utc),
+    )
+
+    assert first is second
+    assert collector.social_metric_calls == 1
 
 
 def _event(

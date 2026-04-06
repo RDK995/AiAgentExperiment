@@ -1,28 +1,58 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/agent_inspector.gd" id="1_inspector"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.0745098, 0.101961, 0.0901961, 0.88)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.768627, 0.807843, 0.592157, 0.22)
+corner_radius_top_left = 18
+corner_radius_top_right = 18
+corner_radius_bottom_right = 18
+corner_radius_bottom_left = 18
+shadow_color = Color(0, 0, 0, 0.24)
+shadow_size = 10
+
 [node name="AgentInspectorPanel" type="PanelContainer"]
-custom_minimum_size = Vector2(240, 220)
+custom_minimum_size = Vector2(300, 420)
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 script = ExtResource("1_inspector")
 
 [node name="Margin" type="MarginContainer" parent="."]
-theme_override_constants/margin_left = 8
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 8
-theme_override_constants/margin_bottom = 8
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
 
 [node name="VBox" type="VBoxContainer" parent="Margin"]
+theme_override_constants/separation = 10
 
 [node name="Title" type="Label" parent="Margin/VBox"]
+theme_override_font_sizes/font_size = 22
 text = "Agent Inspector"
 
 [node name="Summary" type="Label" parent="Margin/VBox"]
 autowrap_mode = 3
+theme_override_font_sizes/font_size = 16
 text = "Select an agent in the world."
+
+[node name="DividerA" type="HSeparator" parent="Margin/VBox"]
+
+[node name="NeedsTitle" type="Label" parent="Margin/VBox"]
+theme_override_font_sizes/font_size = 14
+text = "Needs"
 
 [node name="Needs" type="Label" parent="Margin/VBox"]
 autowrap_mode = 3
+
+[node name="DividerB" type="HSeparator" parent="Margin/VBox"]
+
+[node name="SocialTitle" type="Label" parent="Margin/VBox"]
+theme_override_font_sizes/font_size = 14
+text = "Social"
 
 [node name="Social" type="Label" parent="Margin/VBox"]
 autowrap_mode = 3

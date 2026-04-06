@@ -16,10 +16,10 @@ def test_feed_household_maps_to_sensible_task_chain() -> None:
     assert [task.task_type.value for task in tasks] == [
         "move_to",
         "inspect_stock",
-        "gather_food",
+        "retrieve_item",
         "move_to",
-        "cook",
-        "distribute_food",
+        "cook_food",
+        "share_food_home",
     ]
 
 
@@ -66,8 +66,9 @@ def test_care_for_child_moves_to_visible_infant_before_care() -> None:
 
     assert [(task.task_type.value, task.target_x, task.target_y) for task in tasks] == [
         ("move_to", 2, 3),
-        ("care_for_child", None, None),
+        ("care_for_infant", None, None),
     ]
+    assert tasks[1].metadata["target_agent_id"] == "infant-1"
 
 
 def test_drink_plan_outputs_executor_compatible_structured_tasks() -> None:
@@ -149,8 +150,9 @@ def test_partner_visit_hint_biases_social_plans_and_targets_partner() -> None:
     )
 
     assert selected.action_type.value == "socialize"
-    assert selected.tasks[0].task_type.value == "socialize"
+    assert [task.task_type.value for task in selected.tasks] == ["greet", "talk"]
     assert selected.tasks[0].metadata["target_agent_id"] == "agent-2"
+    assert selected.tasks[1].metadata["target_agent_id"] == "agent-2"
     assert "visit_partner" in selected.tasks[0].metadata["planner_hints"]
 
 
@@ -224,6 +226,32 @@ def test_prioritize_food_security_biases_tied_plans_toward_legal_food_security_a
     assert [task.task_type.value for task in selected.tasks] == ["move_to", "gather_food", "eat"]
     assert selected.tasks[0].metadata["label"] == "food"
     assert "prioritize_food_security" in selected.tasks[0].metadata["planner_hints"]
+
+
+def test_socialize_maps_to_concrete_social_tasks_with_visible_target() -> None:
+    """Social objectives should expand into concrete greeting/talk tasks with a deterministic target."""
+
+    tasks = ActionPlanner().plan_objective(
+        "socialize",
+        AgentState(agent_id="agent-1", name="A", x=0, y=0, partner_id="agent-3"),
+        PerceptionResult(visible_agents=["agent-2", "agent-3"], visible_partner=True),
+    )
+
+    assert [task.task_type.value for task in tasks] == ["greet", "talk"]
+    assert tasks[0].metadata["target_agent_id"] == "agent-3"
+    assert tasks[1].metadata["target_agent_id"] == "agent-3"
+
+
+def test_gather_food_prefers_berries_when_visible_over_generic_food_task() -> None:
+    """Food gathering should choose the more concrete berry action when berry resources are present."""
+
+    tasks = ActionPlanner().plan_objective(
+        "gather_food",
+        AgentState(agent_id="agent-1", name="A", x=0, y=0),
+        PerceptionResult(nearest_food_x=1, nearest_food_y=0, visible_resources=["berries"], nearby_food=True),
+    )
+
+    assert [task.task_type.value for task in tasks] == ["move_to", "gather_berries", "eat"]
 
 
 def test_focus_on_recovery_biases_tied_plans_toward_legal_rest_without_bypassing_legality() -> None:

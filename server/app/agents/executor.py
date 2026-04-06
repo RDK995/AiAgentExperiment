@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 
 from app.agents.actions import ActionType, PlannedTask, SelectedAction, TaskType
 from app.agents.perception import PerceptionResult
+from app.db.enums import StageOfLife
 from app.engine.event_bus import EventBus
 from app.engine.rules.simulation_rules import is_action_legal
-from app.engine.world_state import AgentState, WorldState
+from app.engine.world_state import AgentState, ResourceNodeState, WorldState
 from app.schemas.event import EventType, SimulationEvent
+from app.social.bonding import BondingService, RelationshipMetrics
 
 
 class ActionExecutor:
     """Apply one deterministic action step to authoritative state."""
+
+    def __init__(self, *, bonding_service: BondingService | None = None) -> None:
+        self._bonding_service = bonding_service
 
     def execute(
         self,
@@ -174,6 +180,8 @@ class ActionExecutor:
             return True
 
         if task.task_type is TaskType.DRINK:
+            if not self._consume_inventory_item(agent, {"water"}):
+                self._consume_water_source(world, agent)
             agent.thirst = max(0.0, agent.thirst - 10.0)
             return self._complete_non_move_task(
                 event_bus,
@@ -186,6 +194,9 @@ class ActionExecutor:
                 domain_payload={"action": "drink"},
             )
         if task.task_type is TaskType.EAT:
+            if not self._consume_inventory_item(agent, {"meal", "food", "berries", "fruit", "fish"}):
+                food_source_empty = {"value": False}
+                self._consume_food_source(world, agent, tick, now, event_bus, events, food_source_empty)
             agent.hunger = max(0.0, agent.hunger - 8.0)
             return self._complete_non_move_task(
                 event_bus,
@@ -197,8 +208,23 @@ class ActionExecutor:
                 domain_event_type=EventType.AGENT_ATE,
                 domain_payload={"action": "eat"},
             )
+        if task.task_type is TaskType.SLEEP:
+            if not self._can_sleep(world, agent):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            agent.fatigue = max(0.0, agent.fatigue - 12.0)
+            agent.health = min(100.0, agent.health + 2.0)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
         if task.task_type is TaskType.REST:
             agent.fatigue = max(0.0, agent.fatigue - 6.0)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.GATHER_BERRIES:
+            if not self._gather_resource(world, agent, {"berries"}, inventory_item="berries"):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.FISH:
+            if not self._can_fish(world, agent):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            agent.inventory["fish"] = agent.inventory.get("fish", 0) + 1
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
         if task.task_type is TaskType.GATHER_FOOD:
             food_source_empty = {"value": False}
@@ -219,6 +245,7 @@ class ActionExecutor:
         if task.task_type is TaskType.FETCH_WATER:
             if not self._consume_water_source(world, agent):
                 return self._fail_task(event_bus, tick, now, agent, task, events)
+            agent.inventory["water"] = agent.inventory.get("water", 0) + 1
             agent.thirst = max(0.0, agent.thirst - 4.0)
             agent.memories.append("Fetched fresh water.")
             return self._complete_non_move_task(
@@ -231,18 +258,244 @@ class ActionExecutor:
                 domain_event_type=EventType.AGENT_DRANK,
                 domain_payload={"action": "fetch_water"},
             )
+        if task.task_type is TaskType.PLANT_CROP:
+            if not self._consume_inventory_item(agent, {"seed"}):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            world.resources.append(ResourceNodeState(resource_type="field", x=agent.x, y=agent.y, quantity=1))
+            world.crop_growth = max(world.crop_growth, 5.0)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.HARVEST_CROP:
+            if world.crop_growth < 50.0 or not self._gather_resource(world, agent, {"field", "orchard"}, inventory_item="crop"):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.CHOP_WOOD:
+            if world.terrain_at(agent.x, agent.y) != "forest":
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            agent.inventory["wood"] = agent.inventory.get("wood", 0) + 1
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.COOK_FOOD:
+            if not self._cook_meal(agent):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
         if task.task_type is TaskType.COOK:
             agent.hunger = max(0.0, agent.hunger - 5.0)
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
-        if task.task_type is TaskType.SOCIALIZE:
+        if task.task_type is TaskType.STORE_ITEM:
+            item_type = str(task.metadata.get("item_type", "food"))
+            if not self._transfer_inventory(agent.inventory, agent.home_inventory, item_type):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.RETRIEVE_ITEM:
+            item_type = str(task.metadata.get("item_type", "food"))
+            if not self._transfer_inventory(agent.home_inventory, agent.inventory, item_type):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.GREET:
+            target = self._resolve_target_agent(world, task)
+            if target is None or not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            agent.loneliness = max(0.0, agent.loneliness - 2.0)
+            agent.morale = min(100.0, agent.morale + 1.0)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.SOCIAL_MILESTONE,
+                domain_payload={"kind": "greet", "target_agent_id": target.agent_id},
+            )
+        if task.task_type in {TaskType.TALK, TaskType.SOCIALIZE}:
+            target = self._resolve_target_agent(world, task)
+            if target is not None and not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
             agent.loneliness = max(0.0, agent.loneliness - 8.0)
             agent.morale = min(100.0, agent.morale + 2.0)
-            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+            payload = {"kind": "talk"}
+            if target is not None:
+                payload["target_agent_id"] = target.agent_id
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.SOCIAL_MILESTONE,
+                domain_payload=payload,
+            )
+        if task.task_type is TaskType.GIVE_ITEM:
+            target = self._resolve_target_agent(world, task)
+            item_type = str(task.metadata.get("item_type", "food"))
+            if (
+                target is None
+                or not self._can_interact_with_target(agent, target)
+                or not self._transfer_inventory(agent.inventory, target.inventory, item_type)
+            ):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.GIFT_GIVEN,
+                domain_payload={"item_type": item_type},
+            )
+        if task.task_type is TaskType.ASK_HELP:
+            target = self._resolve_target_agent(world, task)
+            if target is None or not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            agent.hope = min(100.0, agent.hope + 1.0)
+            target.morale = min(100.0, target.morale + 1.0)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.SOCIAL_MILESTONE,
+                domain_payload={"kind": "ask_help", "target_agent_id": target.agent_id},
+            )
+        if task.task_type is TaskType.INSULT:
+            target = self._resolve_target_agent(world, task)
+            if target is None or not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.INSULT_SPOKEN,
+                domain_payload={"target_agent_id": target.agent_id},
+            )
+        if task.task_type is TaskType.APOLOGIZE:
+            target = self._resolve_target_agent(world, task)
+            if target is None or not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            agent.shame = max(0.0, agent.shame - 2.0)
+            target.stress = max(0.0, target.stress - 1.0)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.SOCIAL_MILESTONE,
+                domain_payload={"kind": "apologize", "target_agent_id": target.agent_id},
+            )
         if task.task_type is TaskType.COURT:
+            target = self._resolve_target_agent(world, task)
+            if target is not None and not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
             agent.hope = min(100.0, agent.hope + 2.0)
+            payload = {"kind": "court"}
+            if target is not None:
+                payload["target_agent_id"] = target.agent_id
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.SOCIAL_MILESTONE,
+                domain_payload=payload,
+            )
+        if task.task_type is TaskType.PROPOSE_BOND:
+            target = self._resolve_target_agent(world, task)
+            if (
+                target is None
+                or not self._can_interact_with_target(agent, target)
+                or self._bonding_service is None
+            ):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            result = self._bonding_service.attempt_bond(
+                agent,
+                target,
+                RelationshipMetrics(familiarity=0.8, trust=0.7, attraction=0.8, admiration=0.5),
+                RelationshipMetrics(familiarity=0.8, trust=0.7, attraction=0.8, admiration=0.5),
+                world=world,
+                tick=tick,
+                now=now,
+                event_bus=event_bus,
+            )
+            if not result.attempted:
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            if result.events:
+                events.extend(result.events)
+            if not result.accepted:
+                return False
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
-        if task.task_type is TaskType.CARE_FOR_CHILD:
+        if task.task_type is TaskType.COMFORT:
+            target = self._resolve_target_agent(world, task)
+            if target is None or not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            target.grief = max(0.0, target.grief - 3.0)
+            target.stress = max(0.0, target.stress - 2.0)
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.SOCIAL_MILESTONE,
+                domain_payload={"kind": "comfort", "target_agent_id": target.agent_id},
+            )
+        if task.task_type is TaskType.MOURN:
+            agent.grief = max(0.0, agent.grief - 2.0)
+            agent.current_goal = "Honor the dead"
+            return self._complete_non_move_task(
+                event_bus,
+                tick,
+                now,
+                agent,
+                task,
+                events,
+                domain_event_type=EventType.SOCIAL_MILESTONE,
+                domain_payload={"kind": "mourn"},
+            )
+        if task.task_type in {TaskType.CARE_FOR_INFANT, TaskType.CARE_FOR_CHILD}:
+            target = self._resolve_target_agent(world, task)
+            if (
+                target is None
+                or target.stage_of_life not in {StageOfLife.INFANT, StageOfLife.CHILD}
+                or not self._can_interact_with_target(agent, target)
+            ):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            target.hunger = max(0.0, target.hunger - 4.0)
+            target.fatigue = max(0.0, target.fatigue - 4.0)
             agent.stress = max(0.0, agent.stress - 3.0)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.ESCORT_CHILD:
+            target = self._resolve_target_agent(world, task)
+            if (
+                target is None
+                or target.stage_of_life not in {StageOfLife.CHILD, StageOfLife.ADOLESCENT}
+                or not self._can_interact_with_target(agent, target)
+            ):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            target.safety = min(100.0, target.safety + 5.0)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.TEACH_SKILL:
+            target = self._resolve_target_agent(world, task)
+            if target is None or not self._can_interact_with_target(agent, target):
+                return self._fail_task(event_bus, tick, now, agent, task, events)
+            skill_name = str(task.metadata.get("skill_name", "foraging"))
+            target.skills[skill_name] = round(min(5.0, target.skills.get(skill_name, 0.0) + 0.5), 2)
+            target.hope = min(100.0, target.hope + 1.0)
+            return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
+        if task.task_type is TaskType.SHARE_FOOD_HOME:
+            shared = self._share_food_home(world, agent)
+            if not shared:
+                return self._fail_task(event_bus, tick, now, agent, task, events)
             return self._complete_non_move_task(event_bus, tick, now, agent, task, events)
         if task.task_type is TaskType.WORK_FIELD:
             agent.current_goal = "Maintain village resources"
@@ -446,6 +699,99 @@ class ActionExecutor:
             if world.terrain_at(agent.x + delta_x, agent.y + delta_y) == "water":
                 return True
         return False
+
+    @staticmethod
+    def _consume_inventory_item(agent: AgentState, item_types: Iterable[str]) -> bool:
+        for item_type in item_types:
+            quantity = agent.inventory.get(item_type, 0)
+            if quantity > 0:
+                if quantity == 1:
+                    agent.inventory.pop(item_type, None)
+                else:
+                    agent.inventory[item_type] = quantity - 1
+                return True
+        return False
+
+    @staticmethod
+    def _transfer_inventory(source: dict[str, int], destination: dict[str, int], item_type: str) -> bool:
+        quantity = source.get(item_type, 0)
+        if quantity <= 0:
+            return False
+        if quantity == 1:
+            source.pop(item_type, None)
+        else:
+            source[item_type] = quantity - 1
+        destination[item_type] = destination.get(item_type, 0) + 1
+        return True
+
+    @staticmethod
+    def _resolve_target_agent(world: WorldState, task: PlannedTask) -> AgentState | None:
+        target_agent_id = task.metadata.get("target_agent_id")
+        if not isinstance(target_agent_id, str):
+            return None
+        return world.agent_by_id(target_agent_id)
+
+    @staticmethod
+    def _can_interact_with_target(agent: AgentState, target: AgentState) -> bool:
+        if not agent.alive or not target.alive:
+            return False
+        return abs(agent.x - target.x) + abs(agent.y - target.y) <= 1
+
+    @staticmethod
+    def _can_sleep(world: WorldState, agent: AgentState) -> bool:
+        if "bed" in agent.inventory:
+            return True
+        if "bed" in agent.home_inventory:
+            return True
+        return any(item.item_type == "bed" and (item.x, item.y) == (agent.x, agent.y) for item in world.items)
+
+    def _gather_resource(
+        self,
+        world: WorldState,
+        agent: AgentState,
+        resource_types: set[str],
+        *,
+        inventory_item: str,
+    ) -> bool:
+        for resource in world.resources:
+            if (resource.x, resource.y) == (agent.x, agent.y) and resource.resource_type in resource_types:
+                if resource.quantity <= 0:
+                    return False
+                resource.quantity -= 1
+                agent.inventory[inventory_item] = agent.inventory.get(inventory_item, 0) + 1
+                return True
+        return False
+
+    def _can_fish(self, world: WorldState, agent: AgentState) -> bool:
+        if self._gather_resource(world, agent, {"fish"}, inventory_item="fish"):
+            return True
+        return self._consume_water_source(world, agent)
+
+    @staticmethod
+    def _cook_meal(agent: AgentState) -> bool:
+        for raw_item in ("fish", "crop", "berries", "food"):
+            quantity = agent.inventory.get(raw_item, 0)
+            if quantity <= 0:
+                continue
+            if quantity == 1:
+                agent.inventory.pop(raw_item, None)
+            else:
+                agent.inventory[raw_item] = quantity - 1
+            agent.inventory["meal"] = agent.inventory.get("meal", 0) + 1
+            return True
+        return False
+
+    @staticmethod
+    def _share_food_home(world: WorldState, agent: AgentState) -> bool:
+        if not ActionExecutor._consume_inventory_item(agent, {"meal", "food", "berries", "fish"}):
+            return False
+        shared = False
+        for other in world.agents:
+            if other.agent_id == agent.agent_id or other.household_id != agent.household_id:
+                continue
+            other.hunger = max(0.0, other.hunger - 4.0)
+            shared = True
+        return shared
 
     def _emit_action_executed(
         self,

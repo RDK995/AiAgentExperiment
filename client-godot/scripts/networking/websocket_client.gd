@@ -8,6 +8,7 @@ signal transport_status_changed(mode: String, detail: String)
 @export var base_url: String = "http://127.0.0.1:8000"
 @export var seed_id: String = "v1_village"
 @export var seed_on_startup: bool = false
+@export var seed_if_backend_unseeded: bool = true
 @export var prefer_live_stream: bool = true
 @export var stream_path: String = "/api/v1/world/stream"
 @export var seed_definition_path: String = "/api/v1/world/seeds/%s"
@@ -17,6 +18,7 @@ signal transport_status_changed(mode: String, detail: String)
 @export var poll_interval_seconds: float = 1.0
 @export var stream_poll_seconds: float = 0.25
 @export var reconnect_interval_seconds: float = 3.0
+@export var stale_stream_timeout_seconds: float = 4.0
 
 var _seed_request: HTTPRequest
 var _seed_world_request: HTTPRequest
@@ -29,6 +31,9 @@ var _websocket := WebSocketPeer.new()
 var _transport_mode: String = "idle"
 var _websocket_open_announced: bool = false
 var _fallback_active: bool = false
+var _seed_bootstrap_attempted: bool = false
+var _last_live_message_time_msec: int = 0
+var _websocket_connect_started_msec: int = 0
 
 
 func _ready() -> void:
@@ -65,12 +70,19 @@ func _process(_delta: float) -> void:
 		if not _websocket_open_announced:
 			_websocket_open_announced = true
 			_fallback_active = false
+			_last_live_message_time_msec = Time.get_ticks_msec()
 			_poll_timer.stop()
 			_reconnect_timer.stop()
 			transport_status_changed.emit("websocket", "Connected to live backend stream.")
 		while _websocket.get_available_packet_count() > 0:
 			var packet := _websocket.get_packet().get_string_from_utf8()
+			_last_live_message_time_msec = Time.get_ticks_msec()
 			_handle_websocket_packet(packet)
+		if _stream_has_gone_stale():
+			_restart_stalled_stream()
+	elif state == WebSocketPeer.STATE_CONNECTING:
+		if _connect_attempt_has_timed_out():
+			_restart_stalled_stream()
 	elif state == WebSocketPeer.STATE_CLOSED and not _fallback_active:
 		_start_http_fallback("Live backend stream unavailable, using HTTP snapshot polling.")
 
@@ -84,8 +96,9 @@ func fetch_batch() -> void:
 func _start_websocket_stream() -> void:
 	_transport_mode = "websocket"
 	_websocket_open_announced = false
+	_last_live_message_time_msec = 0
+	_websocket_connect_started_msec = Time.get_ticks_msec()
 	_websocket = WebSocketPeer.new()
-	_poll_timer.stop()
 	var connect_error := _websocket.connect_to_url(_build_stream_url())
 	if connect_error != OK:
 		_start_http_fallback("Failed to open live backend stream, using HTTP snapshot polling.")
@@ -115,6 +128,14 @@ func _attempt_live_reconnect() -> void:
 		return
 	transport_status_changed.emit("connecting", "Retrying live backend stream...")
 	_start_websocket_stream()
+
+
+func _restart_stalled_stream() -> void:
+	transport_warning.emit("Live backend stream stalled, reconnecting...")
+	transport_status_changed.emit("connecting", "Live stream stalled, reconnecting...")
+	_websocket.close()
+	_websocket_connect_started_msec = 0
+	_start_http_fallback("Live backend stream stalled, using HTTP snapshot polling.")
 
 
 func _handle_websocket_packet(packet: String) -> void:
@@ -150,7 +171,10 @@ func _handle_websocket_packet(packet: String) -> void:
 				events = events_value
 			snapshot_batch_received.emit(snapshot, events)
 		"warning":
-			transport_warning.emit(str(envelope.get("warning", "Backend stream warning.")))
+			var warning_message := str(envelope.get("warning", "Backend stream warning."))
+			if seed_if_backend_unseeded and _should_bootstrap_missing_seed(warning_message):
+				_bootstrap_missing_seed()
+			transport_warning.emit(warning_message)
 		_:
 			transport_warning.emit("Ignoring unsupported live backend message.")
 
@@ -195,6 +219,10 @@ func _on_seed_world_completed(
 ) -> void:
 	var payload: Dictionary = _parse_json_dictionary(response_code, body, "world seed") as Dictionary
 	if payload.is_empty():
+		return
+	_seed_bootstrap_attempted = true
+	if _transport_mode == "websocket":
+		transport_status_changed.emit("websocket", "Bootstrapped fixed seed %s." % seed_id)
 		return
 	_poll_timer.start()
 	fetch_batch()
@@ -266,6 +294,36 @@ func _build_stream_url() -> String:
 		seed_flag,
 		stream_poll_seconds,
 	]
+
+
+func _stream_has_gone_stale() -> bool:
+	if stale_stream_timeout_seconds <= 0.0:
+		return false
+	if _last_live_message_time_msec <= 0:
+		return false
+	var elapsed_seconds := float(Time.get_ticks_msec() - _last_live_message_time_msec) / 1000.0
+	return elapsed_seconds >= stale_stream_timeout_seconds
+
+
+func _connect_attempt_has_timed_out() -> bool:
+	if stale_stream_timeout_seconds <= 0.0:
+		return false
+	if _websocket_connect_started_msec <= 0:
+		return false
+	var elapsed_seconds := float(Time.get_ticks_msec() - _websocket_connect_started_msec) / 1000.0
+	return elapsed_seconds >= stale_stream_timeout_seconds
+
+
+func _should_bootstrap_missing_seed(message: String) -> bool:
+	if _seed_bootstrap_attempted:
+		return false
+	return message.contains("No fixed world seed is active on the backend")
+
+
+func _bootstrap_missing_seed() -> void:
+	_seed_bootstrap_attempted = true
+	transport_status_changed.emit("connecting", "No active seed found, requesting %s..." % seed_id)
+	_request_seed_world()
 
 
 func _make_request(callback_name: String) -> HTTPRequest:

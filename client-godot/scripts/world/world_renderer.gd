@@ -8,6 +8,7 @@ const BuildingScene := preload("res://scenes/buildings/Building.tscn")
 @export var tile_size: int = 24
 @export var selection_radius: float = 18.0
 
+@onready var camera_node: Camera2D = $Camera2D
 @onready var buildings_layer: Node2D = $BuildingsLayer
 @onready var agents_layer: Node2D = $AgentsLayer
 @onready var heatmap_overlay: Node2D = $HeatmapOverlay
@@ -22,6 +23,7 @@ var _selected_agent_id: String = ""
 func apply_seed_definition(seed_definition: Dictionary) -> void:
 	_seed_definition = seed_definition.duplicate(true)
 	_reconcile_buildings()
+	_center_camera()
 	queue_redraw()
 
 
@@ -42,12 +44,16 @@ func set_heatmap_enabled(enabled: bool) -> void:
 func _reconcile_buildings() -> void:
 	var structures := _get_seed_structures()
 	var valid_ids: Dictionary = {}
-	for structure in structures:
+	for structure_value in structures:
+		if typeof(structure_value) != TYPE_DICTIONARY:
+			continue
+		var structure: Dictionary = structure_value
 		var structure_id := str(structure.get("structure_id", ""))
 		if structure_id.is_empty():
 			continue
 		valid_ids[structure_id] = true
-		var node: Node2D = _building_nodes.get(structure_id)
+		var node_value: Variant = _building_nodes.get(structure_id)
+		var node: Node2D = node_value if node_value is Node2D else null
 		if node == null:
 			node = BuildingScene.instantiate()
 			node.name = structure_id
@@ -79,7 +85,8 @@ func _reconcile_agents() -> void:
 		if agent_id.is_empty():
 			continue
 		valid_ids[agent_id] = true
-		var node: Node2D = _agent_nodes.get(agent_id)
+		var node_value: Variant = _agent_nodes.get(agent_id)
+		var node: Node2D = node_value if node_value is Node2D else null
 		if node == null:
 			node = AgentSpriteScene.instantiate()
 			node.name = agent_id
@@ -113,6 +120,14 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _draw() -> void:
 	var world_data := _get_world_data()
+	var width := int(world_data.get("width", 0))
+	var height := int(world_data.get("height", 0))
+	if width <= 0 or height <= 0:
+		return
+
+	var world_rect := Rect2(0, 0, width * tile_size, height * tile_size)
+	draw_rect(world_rect, Color(0.11, 0.16, 0.11, 1.0), true)
+
 	var tiles_value: Variant = world_data.get("tiles", [])
 	if typeof(tiles_value) != TYPE_ARRAY:
 		return
@@ -126,16 +141,29 @@ func _draw() -> void:
 		var y := int(tile.get("y", 0))
 		var terrain := str(tile.get("terrain", "grass"))
 		var rect := Rect2(x * tile_size, y * tile_size, tile_size, tile_size)
-		draw_rect(rect, _color_for_terrain(terrain), true)
-		draw_rect(rect, Color(0.1, 0.1, 0.1, 0.1), false, 1.0)
+		draw_rect(rect, _color_for_terrain(terrain, x, y), true)
+
+	for grid_x in range(0, width + 1, 4):
+		var x_line := float(grid_x * tile_size)
+		draw_line(Vector2(x_line, 0), Vector2(x_line, world_rect.size.y), Color(1.0, 1.0, 1.0, 0.045), 1.0)
+	for grid_y in range(0, height + 1, 4):
+		var y_line := float(grid_y * tile_size)
+		draw_line(Vector2(0, y_line), Vector2(world_rect.size.x, y_line), Color(1.0, 1.0, 1.0, 0.045), 1.0)
 
 	var markers := _get_seed_markers()
-	for marker in markers:
+	for marker_value in markers:
+		if typeof(marker_value) != TYPE_DICTIONARY:
+			continue
+		var marker: Dictionary = marker_value
 		var marker_position := Vector2(
 			int(marker.get("x", 0)) * tile_size + (tile_size / 2.0),
 			int(marker.get("y", 0)) * tile_size + (tile_size / 2.0)
 		)
-		draw_circle(marker_position, 5.0, _color_for_marker(str(marker.get("marker_type", "marker"))))
+		var marker_color := _color_for_marker(str(marker.get("marker_type", "marker")))
+		draw_circle(marker_position, 12.0, Color(marker_color.r, marker_color.g, marker_color.b, 0.16))
+		draw_circle(marker_position, 5.0, marker_color)
+
+	draw_rect(world_rect, Color(0.93, 0.97, 0.84, 0.08), false, 2.0)
 
 
 func _agent_at_point(point: Vector2) -> String:
@@ -155,7 +183,9 @@ func _get_world_data() -> Dictionary:
 	if typeof(snapshot_world) == TYPE_DICTIONARY:
 		return snapshot_world
 	if _seed_definition.has("world"):
-		return _seed_definition.get("world", {})
+		var seed_world_value: Variant = _seed_definition.get("world", {})
+		if typeof(seed_world_value) == TYPE_DICTIONARY:
+			return seed_world_value
 	return {}
 
 
@@ -203,25 +233,35 @@ func _get_seed_markers() -> Array:
 	return markers_value
 
 
-func _color_for_terrain(terrain: String) -> Color:
+func _color_for_terrain(terrain: String, x: int, y: int) -> Color:
+	var offset := float(((x * 13) + (y * 7)) % 3) * 0.02
 	match terrain:
 		"path":
-			return Color(0.76, 0.66, 0.45)
+			return Color(0.55 + offset, 0.45 + offset, 0.27 + offset, 1.0)
 		"water":
-			return Color(0.25, 0.45, 0.84)
+			return Color(0.24, 0.42 + offset, 0.74 + offset, 1.0)
 		"forest":
-			return Color(0.20, 0.42, 0.22)
+			return Color(0.17, 0.31 + offset, 0.18, 1.0)
 		_:
-			return Color(0.45, 0.71, 0.39)
+			return Color(0.40 + offset, 0.63 + offset, 0.34 + offset, 1.0)
 
 
 func _color_for_marker(marker_type: String) -> Color:
 	match marker_type:
 		"berries":
-			return Color(0.74, 0.15, 0.34)
+			return Color(0.78, 0.23, 0.35)
 		"river_edge":
-			return Color(0.25, 0.45, 0.84)
+			return Color(0.31, 0.55, 0.86)
 		"forest":
-			return Color(0.18, 0.32, 0.18)
+			return Color(0.28, 0.45, 0.23)
 		_:
-			return Color(0.85, 0.85, 0.85)
+			return Color(0.90, 0.90, 0.78)
+
+
+func _center_camera() -> void:
+	var world_data := _get_world_data()
+	var width := int(world_data.get("width", 0))
+	var height := int(world_data.get("height", 0))
+	if width <= 0 or height <= 0:
+		return
+	camera_node.position = Vector2(width * tile_size * 0.5, height * tile_size * 0.5)

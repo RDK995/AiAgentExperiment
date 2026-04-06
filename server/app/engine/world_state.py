@@ -80,6 +80,9 @@ class AgentState:
     household_id: str | None = None
     partner_id: str | None = None
     parent_ids: list[str] = field(default_factory=list)
+    inventory: dict[str, int] = field(default_factory=dict)
+    home_inventory: dict[str, int] = field(default_factory=dict)
+    skills: dict[str, float] = field(default_factory=dict)
     current_action: str = "idle"
     current_goal: str = "Maintain daily routine"
     mood: str = "steady"

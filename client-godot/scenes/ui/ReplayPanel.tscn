@@ -1,23 +1,41 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/replay_panel.gd" id="1_replay"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_replay"]
+bg_color = Color(0.0705882, 0.0941176, 0.0862745, 0.84)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.772549, 0.807843, 0.584314, 0.22)
+corner_radius_top_left = 18
+corner_radius_top_right = 18
+corner_radius_bottom_right = 18
+corner_radius_bottom_left = 18
+shadow_color = Color(0, 0, 0, 0.22)
+shadow_size = 10
+
 [node name="ReplayPanel" type="PanelContainer"]
-custom_minimum_size = Vector2(240, 180)
+custom_minimum_size = Vector2(540, 170)
+theme_override_styles/panel = SubResource("StyleBoxFlat_replay")
 script = ExtResource("1_replay")
 
 [node name="Margin" type="MarginContainer" parent="."]
-theme_override_constants/margin_left = 8
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 8
-theme_override_constants/margin_bottom = 8
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 14
 
 [node name="VBox" type="VBoxContainer" parent="Margin"]
+theme_override_constants/separation = 8
 
 [node name="Title" type="Label" parent="Margin/VBox"]
-text = "Replay / Event Feed"
+theme_override_font_sizes/font_size = 19
+text = "Village Pulse"
 
 [node name="Events" type="RichTextLabel" parent="Margin/VBox"]
-custom_minimum_size = Vector2(220, 140)
+custom_minimum_size = Vector2(500, 116)
 bbcode_enabled = false
 scroll_active = true
+theme_override_font_sizes/normal_font_size = 14

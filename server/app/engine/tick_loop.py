@@ -144,7 +144,7 @@ class SimulationRuntime:
             need_service=NeedService(),
             utility_ai=UtilityAI(),
             planner=ActionPlanner(),
-            executor=ActionExecutor(),
+            executor=ActionExecutor(bonding_service=bonding_service),
             slow_loop_service=self._slow_loop_service,
             lifecycle_service=LifecycleService(
                 reproduction_service=reproduction_service,

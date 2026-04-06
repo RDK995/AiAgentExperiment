@@ -7,7 +7,8 @@
 script = ExtResource("1_world")
 
 [node name="Camera2D" type="Camera2D" parent="."]
-zoom = Vector2(0.6, 0.6)
+enabled = true
+zoom = Vector2(0.72, 0.72)
 position = Vector2(768, 768)
 
 [node name="BuildingsLayer" type="Node2D" parent="."]

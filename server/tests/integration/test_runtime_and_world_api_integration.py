@@ -158,6 +158,56 @@ def test_runtime_repeated_goal_failures_trigger_reflection_after_three_failures(
     asyncio.run(run_test())
 
 
+def test_runtime_snapshot_exposes_current_action_for_survival_execution() -> None:
+    """Authoritative snapshots should surface the action currently being executed."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=3,
+            height=3,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(3) for x in range(3)],
+            agents=[AgentState(agent_id="agent-1", name="A", x=1, y=1, thirst=90.0)],
+            resources=[ResourceNodeState(resource_type="water", x=1, y=1, quantity=2)],
+            day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        snapshot = await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        assert snapshot.agents[0].current_action == "drink"
+        assert debug_state["last_fast_loop_traces"][0]["selected_action"] == "drink"
+        assert "agent_drank" in debug_state["last_fast_loop_traces"][0]["emitted_event_types"]
+
+    asyncio.run(run_test())
+
+
+def test_runtime_social_execution_uses_concrete_catalog_tasks_and_emits_social_event() -> None:
+    """Runtime planning should expand social objectives into concrete catalog tasks and emit milestone events."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=3,
+            height=3,
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(3) for x in range(3)],
+            agents=[
+                AgentState(agent_id="agent-1", name="A", x=1, y=1, loneliness=90.0),
+                AgentState(agent_id="agent-2", name="B", x=1, y=2),
+            ],
+            day_index=datetime(2000, 1, 1, tzinfo=timezone.utc).toordinal(),
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        snapshot = await runtime.step_once()
+        debug_state = await runtime.get_debug_state()
+
+        assert snapshot.agents[0].current_action == "socialize"
+        assert debug_state["last_fast_loop_traces"][0]["planned_tasks"] == ["greet", "talk"]
+        assert "social_milestone" in debug_state["last_fast_loop_traces"][0]["emitted_event_types"]
+
+    asyncio.run(run_test())
+
+
 def test_runtime_bonded_pair_progresses_from_conception_to_birth_through_lifecycle() -> None:
     """Bonded adult partners should conceive and produce a child through the normal runtime tick path."""
 

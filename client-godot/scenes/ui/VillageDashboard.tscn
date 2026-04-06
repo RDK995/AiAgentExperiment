@@ -1,21 +1,39 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/village_dashboard.gd" id="1_dashboard"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dashboard"]
+bg_color = Color(0.0823529, 0.109804, 0.0980392, 0.82)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.772549, 0.807843, 0.584314, 0.22)
+corner_radius_top_left = 18
+corner_radius_top_right = 18
+corner_radius_bottom_right = 18
+corner_radius_bottom_left = 18
+shadow_color = Color(0, 0, 0, 0.22)
+shadow_size = 10
+
 [node name="VillageDashboard" type="PanelContainer"]
-custom_minimum_size = Vector2(240, 180)
+custom_minimum_size = Vector2(296, 148)
+theme_override_styles/panel = SubResource("StyleBoxFlat_dashboard")
 script = ExtResource("1_dashboard")
 
 [node name="Margin" type="MarginContainer" parent="."]
-theme_override_constants/margin_left = 8
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 8
-theme_override_constants/margin_bottom = 8
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
 
 [node name="VBox" type="VBoxContainer" parent="Margin"]
+theme_override_constants/separation = 8
 
 [node name="Title" type="Label" parent="Margin/VBox"]
-text = "Village Dashboard"
+theme_override_font_sizes/font_size = 19
+text = "Village Overview"
 
 [node name="Stats" type="Label" parent="Margin/VBox"]
 autowrap_mode = 3
+theme_override_font_sizes/font_size = 15

@@ -5,7 +5,7 @@ extends PanelContainer
 
 
 func bind_data(snapshot: Dictionary, seed_definition: Dictionary, events: Array) -> void:
-	title_label.text = "Village Dashboard"
+	title_label.text = "Village Overview"
 
 	var agents_value: Variant = snapshot.get("agents", [])
 	var agents: Array = agents_value if typeof(agents_value) == TYPE_ARRAY else []
@@ -50,7 +50,7 @@ func bind_data(snapshot: Dictionary, seed_definition: Dictionary, events: Array)
 		structures_count = ((world_value as Dictionary).get("structures", []) as Array).size()
 
 	var average_hunger: float = total_hunger / max(1.0, float(agents.size()))
-	stats_label.text = "Population: %d\nAdults: %d  Adolescents: %d  Children: %d\nHouseholds: %d\nStructures: %d\nAvg hunger: %.1f\nRecent births: %d  deaths: %d" % [
+	stats_label.text = "Population %d\nAdults %d   Adolescents %d   Children %d\nHouseholds %d   Structures %d\nAverage hunger %.1f\nRecent births %d   deaths %d" % [
 		agents.size(),
 		adult_count,
 		adolescent_count,

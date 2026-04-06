@@ -12,7 +12,7 @@ func bind_agent(agent_data: Dictionary, seed_definition: Dictionary) -> void:
 	if agent_data.is_empty():
 		_selected_agent_id = ""
 		title_label.text = "Agent Inspector"
-		summary_label.text = "Select an agent in the world."
+		summary_label.text = "Select an agent in the world to open a focused profile."
 		needs_label.text = ""
 		social_label.text = ""
 		return
@@ -22,7 +22,7 @@ func bind_agent(agent_data: Dictionary, seed_definition: Dictionary) -> void:
 		str(agent_data.get("name", "Unknown")),
 		str(agent_data.get("stage_of_life", "adult")),
 	]
-	summary_label.text = "Action: %s\nGoal: %s\nHousehold: %s" % [
+	summary_label.text = "Current action: %s\nCurrent goal: %s\nHousehold: %s" % [
 		str(agent_data.get("current_action", "idle")),
 		str(agent_data.get("current_goal", "n/a")),
 		str(agent_data.get("household_id", "unassigned")),
@@ -31,7 +31,7 @@ func bind_agent(agent_data: Dictionary, seed_definition: Dictionary) -> void:
 	var needs_value: Variant = agent_data.get("needs", {})
 	if typeof(needs_value) == TYPE_DICTIONARY:
 		var needs: Dictionary = needs_value
-		needs_label.text = "Needs\nHunger: %.1f\nThirst: %.1f\nFatigue: %.1f" % [
+		needs_label.text = "Hunger %.1f\nThirst %.1f\nFatigue %.1f" % [
 			float(needs.get("hunger", 0.0)),
 			float(needs.get("thirst", 0.0)),
 			float(needs.get("fatigue", 0.0)),
@@ -45,8 +45,12 @@ func bind_agent(agent_data: Dictionary, seed_definition: Dictionary) -> void:
 	if not partner_id.is_empty():
 		social_lines.append("Partner: %s" % partner_id)
 	for link in seed_links:
-		social_lines.append("%s: %s" % [str(link.get("kind", "link")), str(link.get("note", ""))])
-	social_label.text = "Social\n%s" % ("\n".join(social_lines) if social_lines.size() > 0 else "No social summary available")
+		var link_note := str(link.get("note", ""))
+		if link_note.is_empty():
+			social_lines.append(str(link.get("kind", "link")).capitalize())
+		else:
+			social_lines.append("%s: %s" % [str(link.get("kind", "link")).capitalize(), link_note])
+	social_label.text = "\n".join(social_lines) if social_lines.size() > 0 else "No seeded social notes for this agent yet."
 
 
 func _social_links_for_agent(agent_id: String, seed_definition: Dictionary) -> Array:

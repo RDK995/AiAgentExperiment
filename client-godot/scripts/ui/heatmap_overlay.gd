@@ -40,13 +40,11 @@ func _draw() -> void:
 		var hunger_ratio := clampf(float(needs.get("hunger", 0.0)) / 100.0, 0.0, 1.0)
 		if hunger_ratio <= 0.0:
 			continue
-		draw_rect(
-			Rect2(
-				int(position.get("x", 0)) * tile_size,
-				int(position.get("y", 0)) * tile_size,
-				tile_size,
-				tile_size
-			),
-			Color(1.0, 0.25, 0.18, 0.12 + (hunger_ratio * 0.35)),
-			true
+		var rect := Rect2(
+			int(position.get("x", 0)) * tile_size,
+			int(position.get("y", 0)) * tile_size,
+			tile_size,
+			tile_size
 		)
+		draw_rect(rect, Color(1.0, 0.32, 0.22, 0.08 + (hunger_ratio * 0.22)), true)
+		draw_circle(rect.get_center(), tile_size * 0.42, Color(1.0, 0.48, 0.24, 0.05 + (hunger_ratio * 0.18)))

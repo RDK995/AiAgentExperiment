@@ -5,6 +5,7 @@ signal heatmap_toggled(enabled: bool)
 var _last_snapshot: Dictionary = {}
 var _last_seed_definition: Dictionary = {}
 var _last_events: Array = []
+var _last_debug_metrics: Dictionary = {}
 var _transport_status: String = "Starting..."
 var _transport_warning: String = ""
 
@@ -24,13 +25,14 @@ func _ready() -> void:
 	_apply_panel_visibility()
 
 
-func bind_world_state(snapshot: Dictionary, seed_definition: Dictionary, events: Array) -> void:
+func bind_world_state(snapshot: Dictionary, seed_definition: Dictionary, events: Array, debug_metrics: Dictionary = {}) -> void:
 	_last_snapshot = snapshot.duplicate(true)
 	_last_seed_definition = seed_definition.duplicate(true)
 	_last_events = events.duplicate(true)
+	_last_debug_metrics = debug_metrics.duplicate(true)
 	_update_status_line()
 	if dashboard_panel.has_method("bind_data"):
-		dashboard_panel.call("bind_data", _last_snapshot, _last_seed_definition, _last_events)
+		dashboard_panel.call("bind_data", _last_snapshot, _last_seed_definition, _last_events, _last_debug_metrics)
 	if replay_panel.has_method("bind_events"):
 		replay_panel.call("bind_events", _last_events)
 

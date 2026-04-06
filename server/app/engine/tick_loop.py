@@ -51,6 +51,7 @@ from app.schemas.api import (
     ChunkResponse,
     DailySummaryCandidateSummary,
     DailySummaryCandidatesResponse,
+    DailyMetricsDebugResponse,
     DebugMetricsResponse,
     EpisodesResponse,
     ForceReflectResponse,
@@ -75,6 +76,7 @@ from app.schemas.api import (
 from app.schemas.agent import AgentStateSnapshot
 from app.schemas.event import EventType, SimulationEvent, WorldEventSchema
 from app.telemetry.metrics import TelemetryRecorder
+from app.telemetry.observability import DailyMetricsCollector
 
 
 class SimulationRuntime:
@@ -99,6 +101,11 @@ class SimulationRuntime:
         self._running = False
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
+        self._daily_metrics = DailyMetricsCollector(
+            session_scope=self._world_event_session_scope,
+            resolve_agent_id=self._resolve_persistent_agent_id,
+        )
+        self._daily_metrics.start_day(initial_state.day_index)
         self._replay_log = ReplayEventLog(max_events=200)
         self._recent_events: list[SimulationEvent] = []
         self._recent_reflections = []
@@ -158,6 +165,7 @@ class SimulationRuntime:
             agent_runtime=self._agent_runtime,
             telemetry=self._telemetry,
             event_bus=self._event_bus,
+            daily_metrics=self._daily_metrics,
         )
 
     async def start(self) -> None:
@@ -454,6 +462,21 @@ class SimulationRuntime:
                 last_tick_event_type_counts=(
                     dict(last_tick.event_type_counts) if last_tick is not None else {}
                 ),
+                latest_daily_metrics=self._daily_metrics.latest_snapshot(),
+                recent_daily_metrics=self._daily_metrics.recent_snapshots(),
+            )
+
+    async def get_daily_metrics_debug(self, limit: int = 7) -> DailyMetricsDebugResponse:
+        """Return latest and recent finalized daily metrics for debug/dashboard consumers."""
+
+        async with self._lock:
+            return DailyMetricsDebugResponse(
+                current=self._daily_metrics.current_snapshot(
+                    self._world_state,
+                    finalized_at=self._world_state.current_time,
+                ),
+                latest=self._daily_metrics.latest_snapshot(),
+                recent=self._daily_metrics.recent_snapshots(limit=limit),
             )
 
     async def get_replay_events(self, limit: int = 20) -> ReplayResponse:
@@ -559,20 +582,52 @@ class SimulationRuntime:
             )
 
     async def advance_days(self, days: int) -> AdvanceDaysResponse:
-        """Advance the simulation by coarse admin day units.
+        """Advance the authoritative clock by coarse admin day units.
 
-        The prototype keeps admin advancement responsive by approximating one day as 24 ticks.
+        Admin day advancement is intentionally coarse and fast. It finalizes the
+        current day metrics and advances the authoritative clock/state by whole
+        days without simulating every second-granularity tick in between.
+        This method does not run normal world/agent/lifecycle subsystems.
         """
 
         async with self._lock:
-            ticks_run = days * 24
-            for _ in range(ticks_run):
-                self._step_once_locked()
+            ticks_per_admin_day = 24
+            ticks_run = 0
+            for _ in range(days):
+                previous_day_index = self._world_state.day_index
+                next_day_index = previous_day_index + 1
+                next_time = self._world_state.current_time + timedelta(days=1)
+
+                self._daily_metrics.finalize_day(
+                    self._world_state,
+                    day_index=previous_day_index,
+                    finalized_at=next_time,
+                    next_day_index=next_day_index,
+                )
+
+                self._world_state.tick += ticks_per_admin_day
+                self._world_state.current_time = next_time
+                self._world_state.day_index = next_day_index
+                self._sim_clock._tick = self._world_state.tick
+                self._sim_clock._current_time = next_time
+
+                self._event_bus.emit(
+                    SimulationEvent(
+                        type=EventType.DAY_ROLLOVER,
+                        tick=self._world_state.tick,
+                        sim_time=next_time,
+                        source_module="runtime",
+                        payload={"day_index": next_day_index},
+                    )
+                )
+                ticks_run += ticks_per_admin_day
             return AdvanceDaysResponse(
                 days_requested=days,
                 ticks_run=ticks_run,
                 final_tick=self._world_state.tick,
                 current_time=self._world_state.current_time.isoformat(),
+                advance_mode="clock_jump",
+                simulation_progressed=False,
             )
 
     async def reset_world(self) -> ResetWorldResponse:
@@ -694,6 +749,11 @@ class SimulationRuntime:
         """Advance one tick while the caller holds the runtime lock."""
 
         snapshot = self._world_loop.tick_once()
+        if self._slow_loop_service.last_results:
+            self._daily_metrics.observe_reflection_results(
+                self._world_state.day_index,
+                self._slow_loop_service.last_results,
+            )
         self._record_reflection_results()
         if self._telemetry.last_flushed_events:
             self._replay_log.record(self._telemetry.last_flushed_events[-1])
@@ -715,6 +775,11 @@ class SimulationRuntime:
             self._current_seed_id = None
         self._scheduler = TaskScheduler()
         self._telemetry = TelemetryRecorder()
+        self._daily_metrics = DailyMetricsCollector(
+            session_scope=self._world_event_session_scope,
+            resolve_agent_id=self._resolve_persistent_agent_id,
+        )
+        self._daily_metrics.start_day(self._world_state.day_index)
         self._replay_log = ReplayEventLog(max_events=200)
         self._event_bus = self._build_event_bus()
         self._recent_events = []
@@ -730,6 +795,7 @@ class SimulationRuntime:
             agent_runtime=self._agent_runtime,
             telemetry=self._telemetry,
             event_bus=self._event_bus,
+            daily_metrics=self._daily_metrics,
         )
 
     def _serialize_world_event(self, event: SimulationEvent, index: int) -> WorldEventSchema:
@@ -745,6 +811,7 @@ class SimulationRuntime:
 
         event_bus = EventBus()
         event_bus.subscribe_all(self._telemetry.observe_event)
+        event_bus.subscribe_all(self._daily_metrics.observe_event)
         event_bus.subscribe_all(self._replay_log.handle)
         event_bus.subscribe_all(
             MemoryPipelineListener(

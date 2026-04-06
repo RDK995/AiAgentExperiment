@@ -10,6 +10,7 @@ from app.engine.world_state import WorldState
 from app.schemas.api import SimulationSnapshot
 from app.schemas.event import EventType, SimulationEvent
 from app.telemetry.metrics import TelemetryRecorder
+from app.telemetry.observability import DailyMetricsCollector
 
 
 class WorldLoop:
@@ -23,6 +24,7 @@ class WorldLoop:
         agent_runtime: AgentRuntime,
         telemetry: TelemetryRecorder,
         event_bus: EventBus,
+        daily_metrics: DailyMetricsCollector | None = None,
     ) -> None:
         self._world_state = world_state
         self._sim_clock = sim_clock
@@ -30,11 +32,19 @@ class WorldLoop:
         self._agent_runtime = agent_runtime
         self._telemetry = telemetry
         self._event_bus = event_bus
+        self._daily_metrics = daily_metrics
 
     def tick_once(self) -> SimulationSnapshot:
         """Advance the entire authoritative world by one tick."""
 
         tick = self._sim_clock.advance()
+        if tick.day_rolled_over and self._daily_metrics is not None:
+            self._daily_metrics.finalize_day(
+                self._world_state,
+                day_index=tick.previous_day_index,
+                finalized_at=tick.at,
+                next_day_index=tick.day_index,
+            )
         self._world_state.tick = tick.tick
         self._world_state.current_time = tick.at
         self._world_state.day_index = tick.day_index

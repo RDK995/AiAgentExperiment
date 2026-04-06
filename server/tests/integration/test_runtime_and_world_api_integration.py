@@ -208,6 +208,77 @@ def test_runtime_social_execution_uses_concrete_catalog_tasks_and_emits_social_e
     asyncio.run(run_test())
 
 
+def test_runtime_day_rollover_finalizes_daily_metrics_and_exposes_them_through_debug_metrics() -> None:
+    """Crossing a simulation day boundary should finalize the previous day's metrics snapshot."""
+
+    async def run_test() -> None:
+        rollover_time = datetime(2000, 1, 1, 23, 0, tzinfo=timezone.utc)
+        world = WorldState(
+            width=3,
+            height=3,
+            current_time=rollover_time,
+            day_index=rollover_time.toordinal(),
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(3) for x in range(3)],
+            agents=[
+                AgentState(agent_id="agent-1", name="A", x=1, y=1, hunger=60.0, household_id="house-1"),
+                AgentState(agent_id="agent-2", name="B", x=1, y=2, hunger=20.0, household_id="house-1"),
+            ],
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=3600.0)
+
+        await runtime.emit_simulation_event(
+            EventType.GIFT_GIVEN,
+            agent_id="agent-1",
+            actor_ids=["agent-1"],
+            target_ids=["agent-2"],
+            payload={"item_type": "berries"},
+            source_module="integration-test",
+        )
+        await runtime.step_once()
+        metrics = await runtime.get_debug_metrics()
+
+        assert metrics.latest_daily_metrics is not None
+        assert metrics.latest_daily_metrics.day_index == rollover_time.toordinal()
+        assert metrics.latest_daily_metrics.social.gifts_per_day == 1
+        assert metrics.latest_daily_metrics.population.total_population == 2
+        assert metrics.recent_daily_metrics[-1].day_index == rollover_time.toordinal()
+
+    asyncio.run(run_test())
+
+
+def test_admin_advance_days_is_an_explicit_clock_jump_and_does_not_run_fast_loop_subsystems() -> None:
+    """Admin day advancement should jump clock/day state without executing agent actions."""
+
+    async def run_test() -> None:
+        world = WorldState(
+            width=3,
+            height=3,
+            current_time=datetime(2000, 1, 1, 6, 0, tzinfo=timezone.utc),
+            day_index=datetime(2000, 1, 1, 6, 0, tzinfo=timezone.utc).toordinal(),
+            tiles=[TileState(x=x, y=y, terrain=TerrainType.PATH, walkable=True) for y in range(3) for x in range(3)],
+            agents=[AgentState(agent_id="agent-1", name="A", x=1, y=1, thirst=90.0)],
+            resources=[ResourceNodeState(resource_type="water", x=1, y=1, quantity=2)],
+        )
+        runtime = SimulationRuntime(initial_state=world, tick_interval_seconds=60.0)
+
+        before_snapshot = await runtime.get_snapshot()
+        response = await runtime.advance_days(1)
+        after_snapshot = await runtime.get_snapshot()
+        recent_events = await runtime.get_recent_world_events(limit=10)
+        debug_state = await runtime.get_debug_state()
+
+        assert response.advance_mode == "clock_jump"
+        assert response.simulation_progressed is False
+        assert after_snapshot.tick == before_snapshot.tick + 24
+        assert after_snapshot.agents[0].needs.thirst == before_snapshot.agents[0].needs.thirst
+        assert after_snapshot.agents[0].current_action == before_snapshot.agents[0].current_action == "idle"
+        assert "agent_drank" not in {event.event_type for event in recent_events}
+        assert recent_events == []
+        assert debug_state["last_fast_loop_traces"] == []
+
+    asyncio.run(run_test())
+
+
 def test_runtime_bonded_pair_progresses_from_conception_to_birth_through_lifecycle() -> None:
     """Bonded adult partners should conceive and produce a child through the normal runtime tick path."""
 

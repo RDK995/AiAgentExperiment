@@ -56,7 +56,12 @@ async def advance_days(
     days: int = Path(ge=1, le=30),
     runtime: SimulationRuntime = Depends(get_runtime),
 ) -> AdvanceDaysResponse:
-    """Advance the simulation by a coarse number of prototype days."""
+    """Advance the authoritative clock by a coarse number of prototype days.
+
+    This admin helper intentionally performs a clock/day jump. It does not run
+    normal world ticks, agent execution, lifecycle progression, or other
+    simulation subsystems between the start and end of the jump.
+    """
 
     return await runtime.advance_days(days)
 

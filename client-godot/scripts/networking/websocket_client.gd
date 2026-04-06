@@ -2,6 +2,7 @@ extends Node
 
 signal seed_definition_received(seed_definition: Dictionary)
 signal snapshot_batch_received(snapshot: Dictionary, events: Array)
+signal debug_metrics_received(metrics: Dictionary)
 signal transport_warning(message: String)
 signal transport_status_changed(mode: String, detail: String)
 
@@ -15,6 +16,8 @@ signal transport_status_changed(mode: String, detail: String)
 @export var seed_world_path: String = "/api/v1/world/seed"
 @export var snapshot_path: String = "/api/v1/world/snapshot"
 @export var recent_events_path: String = "/api/v1/world/events/recent?limit=20"
+@export var debug_metrics_path: String = "/api/v1/debug/metrics/daily?limit=7"
+@export var debug_metrics_poll_interval_seconds: float = 5.0
 @export var poll_interval_seconds: float = 1.0
 @export var stream_poll_seconds: float = 0.25
 @export var reconnect_interval_seconds: float = 3.0
@@ -24,6 +27,7 @@ var _seed_request: HTTPRequest
 var _seed_world_request: HTTPRequest
 var _snapshot_request: HTTPRequest
 var _events_request: HTTPRequest
+var _debug_metrics_request: HTTPRequest
 var _poll_timer: Timer
 var _reconnect_timer: Timer
 var _pending_snapshot: Dictionary = {}
@@ -34,6 +38,7 @@ var _fallback_active: bool = false
 var _seed_bootstrap_attempted: bool = false
 var _last_live_message_time_msec: int = 0
 var _websocket_connect_started_msec: int = 0
+var _last_debug_metrics_request_time_msec: int = 0
 
 
 func _ready() -> void:
@@ -41,6 +46,7 @@ func _ready() -> void:
 	_seed_world_request = _make_request("_on_seed_world_completed")
 	_snapshot_request = _make_request("_on_snapshot_completed")
 	_events_request = _make_request("_on_events_completed")
+	_debug_metrics_request = _make_request("_on_debug_metrics_completed")
 
 	_poll_timer = Timer.new()
 	_poll_timer.wait_time = poll_interval_seconds
@@ -91,6 +97,18 @@ func fetch_batch() -> void:
 	var error := _snapshot_request.request("%s%s" % [base_url, snapshot_path])
 	if error != OK:
 		transport_warning.emit("Failed to request snapshot: %s" % error_string(error))
+
+
+func request_debug_metrics() -> void:
+	if _debug_metrics_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		return
+	if not _can_request_debug_metrics():
+		return
+	var error := _debug_metrics_request.request("%s%s" % [base_url, debug_metrics_path])
+	if error != OK:
+		transport_warning.emit("Failed to request debug metrics: %s" % error_string(error))
+		return
+	_last_debug_metrics_request_time_msec = Time.get_ticks_msec()
 
 
 func _start_websocket_stream() -> void:
@@ -262,6 +280,18 @@ func _on_events_completed(
 	snapshot_batch_received.emit(_pending_snapshot, events)
 
 
+func _on_debug_metrics_completed(
+	_result: int,
+	response_code: int,
+	_headers: PackedStringArray,
+	body: PackedByteArray
+) -> void:
+	var payload: Dictionary = _parse_json_dictionary(response_code, body, "debug metrics") as Dictionary
+	if payload.is_empty():
+		return
+	debug_metrics_received.emit(payload)
+
+
 func _parse_json_dictionary(response_code: int, body: PackedByteArray, label: String) -> Dictionary:
 	if response_code != 200:
 		transport_warning.emit("%s request failed with status %d" % [label.capitalize(), response_code])
@@ -312,6 +342,15 @@ func _connect_attempt_has_timed_out() -> bool:
 		return false
 	var elapsed_seconds := float(Time.get_ticks_msec() - _websocket_connect_started_msec) / 1000.0
 	return elapsed_seconds >= stale_stream_timeout_seconds
+
+
+func _can_request_debug_metrics() -> bool:
+	if debug_metrics_poll_interval_seconds <= 0.0:
+		return true
+	if _last_debug_metrics_request_time_msec <= 0:
+		return true
+	var elapsed_seconds := float(Time.get_ticks_msec() - _last_debug_metrics_request_time_msec) / 1000.0
+	return elapsed_seconds >= debug_metrics_poll_interval_seconds
 
 
 func _should_bootstrap_missing_seed(message: String) -> bool:
